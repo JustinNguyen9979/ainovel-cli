@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/errs"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore/schema"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/errs"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // ReviseOutlineTool 让 Architect 用完整替换内容修订尚未发生的大纲尾段。

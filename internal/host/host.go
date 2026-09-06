@@ -12,25 +12,26 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/assets"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/agents"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/agents/ctxpack"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/arbiter"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/bootstrap"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/flow"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host/exp"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host/imp"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host/sim"
+	runtimelog "github.com/JustinNguyen9979/ainovel-cli/internal/logger"
+	modelreg "github.com/JustinNguyen9979/ainovel-cli/internal/models"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/notify"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/revision"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/rules"
+	storepkg "github.com/JustinNguyen9979/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/tools"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/userrules"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/assets"
-	"github.com/voocel/ainovel-cli/internal/agents"
-	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
-	"github.com/voocel/ainovel-cli/internal/arbiter"
-	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/flow"
-	"github.com/voocel/ainovel-cli/internal/host/exp"
-	"github.com/voocel/ainovel-cli/internal/host/imp"
-	"github.com/voocel/ainovel-cli/internal/host/sim"
-	runtimelog "github.com/voocel/ainovel-cli/internal/logger"
-	modelreg "github.com/voocel/ainovel-cli/internal/models"
-	"github.com/voocel/ainovel-cli/internal/notify"
-	"github.com/voocel/ainovel-cli/internal/revision"
-	"github.com/voocel/ainovel-cli/internal/rules"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
-	"github.com/voocel/ainovel-cli/internal/tools"
-	"github.com/voocel/ainovel-cli/internal/userrules"
 )
 
 // Host 是运行时外壳:生命周期/干预入口/事件投影/模型管理。
@@ -1520,21 +1521,51 @@ func (h *Host) ReplayQueue(afterSeq int64) ([]domain.RuntimeQueueItem, error) {
 // ── 共创 ──
 
 // CoCreateStream 冷启动共创：从零澄清需求，产出整本书的创作指令。
-func (h *Host) CoCreateStream(ctx context.Context, history []CoCreateMessage, onProgress func(kind, text string)) (CoCreateReply, error) {
-	return coCreateStream(ctx, h.models, h.store.Sessions, coCreateSystemPrompt, history, onProgress)
+func (h *Host) CoCreateStream(ctx context.Context, history []CoCreateMessage, onProgress func(kind, text string), languages ...utils.Language) (CoCreateReply, error) {
+	return h.coCreateStream(ctx, history, coCreateSystemPrompt(h.coCreateLanguage(languages...)), onProgress)
+}
+
+func (h *Host) coCreateStream(ctx context.Context, history []CoCreateMessage, sysPrompt string, onProgress func(kind, text string)) (CoCreateReply, error) {
+	reportFailover := func(ev bootstrap.FailoverEvent) {
+		slog.Warn("共创 provider 切换", "module", "cocreate", "role", ev.Role,
+			"reason", ev.Reason,
+			"from", fmt.Sprintf("%s/%s", ev.FromProvider, ev.FromModel),
+			"to", fmt.Sprintf("%s/%s", ev.ToProvider, ev.ToModel), "err", ev.Err)
+	}
+	model := h.models.ForRoleWithFailover("cocreate", reportFailover)
+	model = newUsageTrackedModel(model, "cocreate", h.usage.Record)
+	thinking, err := agents.ParseThinkingLevel(h.cfg.ResolveReasoningEffort("cocreate"))
+	if err != nil {
+		slog.Warn("忽略无效共创推理强度", "module", "cocreate", "err", err)
+		thinking = ""
+	}
+	thinking, _ = agents.ResolveThinkingForModel(model, thinking)
+	return coCreateStream(ctx, model, h.store.Sessions, sysPrompt, history, thinking, onProgress)
+}
+
+func (h *Host) coCreateLanguage(languages ...utils.Language) utils.Language {
+	if len(languages) > 0 && languages[0] != "" {
+		return coCreateLanguage(languages)
+	}
+	return hostLanguage(h.cfg.Language)
 }
 
 // StageCoCreateStream 阶段共创：在已写内容的基础上规划后续方向。
 // 系统提示 = 阶段 prompt + 当前故事状态摘要，让助手知道"已经写了什么"。
-func (h *Host) StageCoCreateStream(ctx context.Context, history []CoCreateMessage, onProgress func(kind, text string)) (CoCreateReply, error) {
-	return coCreateStream(ctx, h.models, h.store.Sessions, stageSystemPrompt(h.store), history, onProgress)
+func (h *Host) StageCoCreateStream(ctx context.Context, history []CoCreateMessage, onProgress func(kind, text string), languages ...utils.Language) (CoCreateReply, error) {
+	return h.coCreateStream(ctx, history, stageSystemPrompt(h.store, h.coCreateLanguage(languages...)), onProgress)
 }
 
 // stagePlanPrefix 把共创产出的"后续方向 brief"包装成一条阶段规划干预，交 Arbiter 裁定。
 // 只贴 [阶段规划] 事实标记 + 中性陈述，不写死"怎么落地"——具体路由（compass / architect /
 // user_rules）交给 arbiter-intervention.md 的「阶段规划」判据，避免与 prompt 形成第二真相源、
 // 也不堵死风格类要求走 user_rules（守"分类裁定归 LLM"）。Continue 再叠加 [用户干预] 前缀。
-const stagePlanPrefix = "[阶段规划] 我暂停创作，和共创助手一起梳理了下面的后续方向，请按你的干预分类裁定如何落地，然后继续创作。后续方向如下：\n\n"
+func stagePlanPrefix(lang utils.Language) string {
+	if lang == utils.LanguageVI {
+		return "[Lập kế hoạch giai đoạn] Tôi đã tạm dừng sáng tác và cùng trợ lý đồng sáng tác tổng hợp hướng đi tiếp theo dưới đây. Hãy phân loại can thiệp để quyết định cách áp dụng, rồi tiếp tục sáng tác. Hướng đi tiếp theo:\n\n"
+	}
+	return "[阶段规划] 我暂停创作，和共创助手一起梳理了下面的后续方向，请按你的干预分类裁定如何落地，然后继续创作。后续方向如下：\n\n"
+}
 
 // PauseForCoCreate 进入阶段共创：置共创占用标记，运行中则一并暂停 Engine。
 // 返回 false 表示无法进入（全书已完成或已在共创中），调用方忽略即可。
@@ -1553,10 +1584,11 @@ func (h *Host) PauseForCoCreate() bool {
 
 	// 运行中复用 abortWithEvent 停机（running→paused + setAborting + Abort + 事件），与手动
 	// 暂停同序、不另抄一遍；已停止（idle/paused）只置标记，规划完经 Continue 续跑。
+	lang := hostLanguage(h.cfg.Language)
 	if running {
-		h.abortWithEvent("进入阶段共创，创作已暂停", "info")
+		h.abortWithEvent(localizedCoCreateEvent(lang, "进入阶段共创，创作已暂停", "Đã tạm dừng sáng tác để cùng lập kế hoạch"), "info")
 	} else {
-		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "进入阶段共创", Level: "info"})
+		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: localizedCoCreateEvent(lang, "进入阶段共创", "Đã vào chế độ cùng lập kế hoạch"), Level: "info"})
 	}
 	return true
 }
@@ -1584,8 +1616,9 @@ func (h *Host) ResumeFromCoCreate(draft string) error {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "阶段共创完成，已注入后续方向并恢复创作", Level: "info"})
-	return h.Continue(stagePlanPrefix + draft)
+	lang := hostLanguage(h.cfg.Language)
+	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: localizedCoCreateEvent(lang, "阶段共创完成，已注入后续方向并恢复创作", "Đồng sáng tác giai đoạn đã hoàn tất, đã áp dụng hướng đi tiếp theo và tiếp tục sáng tác"), Level: "info"})
+	return h.Continue(stagePlanPrefix(lang) + draft)
 }
 
 // CancelCoCreate 放弃阶段共创：清占用标记，保持暂停态（用户可在输入框继续或重启 Resume）。
@@ -1597,7 +1630,8 @@ func (h *Host) CancelCoCreate() {
 	}
 	h.cocreating = false
 	h.mu.Unlock()
-	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "已退出阶段共创，创作保持暂停（可在输入框继续）", Level: "info"})
+	lang := hostLanguage(h.cfg.Language)
+	h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: localizedCoCreateEvent(lang, "已退出阶段共创，创作保持暂停（可在输入框继续）", "Đã thoát chế độ cùng lập kế hoạch, sáng tác vẫn tạm dừng (có thể tiếp tục trong ô nhập)"), Level: "info"})
 }
 
 // ── 工具 ──
@@ -1725,8 +1759,8 @@ func (h *Host) ImportFrom(ctx context.Context, opts imp.Options) (<-chan imp.Eve
 
 // ImportResumeHint 返回未完成导入的一行提示（无则空串），供 TUI 启动时主动告知（RFC §18.2）。
 // 只在启动时调用一次：内部会重算工作区各工件的 InputDigest，不适合放进快照轮询。
-func (h *Host) ImportResumeHint() string {
-	return imp.ResumeSummary(h.store)
+func (h *Host) ImportResumeHint(languages ...utils.Language) string {
+	return imp.ResumeSummary(h.store, languages...)
 }
 
 // importCaller 解析一个导入语义函数的模型档位（RFC §13.1）：roles 配置存在 import_<fn>

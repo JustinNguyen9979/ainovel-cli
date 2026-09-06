@@ -1,0 +1,41 @@
+{
+  "name": "ainovel-cli-vn",
+  "version": "0.8.0",
+  "description": "Vietnamese AI novel writing CLI",
+  "bin": {
+    "ainovel-cli-vn": "bin/ainovel-cli-vn.js"
+  },
+  "files": [
+    "bin/ainovel-cli-vn.js",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JustinNguyen9979/ainovel-cli.git"
+  },
+  "homepage": "https://github.com/JustinNguyen9979/ainovel-cli",
+  "bugs": {
+    "url": "https://github.com/JustinNguyen9979/ainovel-cli/issues"
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

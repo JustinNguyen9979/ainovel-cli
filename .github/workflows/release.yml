@@ -1,41 +1,262 @@
-name: Release
+name: Production Release
 
 on:
   push:
     tags:
-      - "v*"
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing protected SemVer tag to promote
+        required: true
+        type: string
+
+concurrency:
+  group: production-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  goreleaser:
-    runs-on: ubuntu-latest
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.commit.outputs.commit }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout exact tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          go-version: stable
-
-      - name: Generate release notes
-        run: .github/scripts/gen-changelog.sh > release-notes.md
+          node-version: 22
+      - name: Resolve and validate version
+        id: version
+        shell: bash
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          INPUT_TAG: ${{ inputs.tag }}
+          PUSH_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$PUSH_TAG}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z-]+)?$ ]]
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: Verify tag belongs to main
+        id: commit
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-list -n 1 "$TAG")"
+          git merge-base --is-ancestor "$commit" origin/main
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Verify package metadata and license
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          test "$(node -p "require('./package.json').version")" = "$VERSION"
+          test "$(node -p "require('./package-lock.json').version")" = "$VERSION"
+          test "$(node -p "require('./package.json').license")" = Apache-2.0
+          grep -q 'Apache License' LICENSE
+      - name: Verify modules
+        run: go mod verify
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+  quality:
+    name: Full quality gates
+    needs: preflight
+    uses: ./.github/workflows/quality.yml
+    with:
+      ref: ${{ needs.preflight.outputs.tag }}
+    secrets: inherit
+
+  build:
+    name: Build immutable artifacts
+    needs: [preflight, quality]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Build GoReleaser artifacts
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
         with:
           distribution: goreleaser
-          version: "~> v2"
-          args: >-
-            release --clean
-            --release-notes=release-notes.md
+          version: '~> v2'
+          args: release --clean --skip=publish --skip=announce
+      - name: Verify native artifact set
+        run: scripts/ci/verify-artifacts.sh dist "${{ needs.preflight.outputs.version }}"
+      - name: Pack npm tarball
+        run: npm pack --pack-destination dist
+      - name: Generate build manifest
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          COMMIT: ${{ needs.preflight.outputs.commit }}
+        run: |
+          set -euo pipefail
+          manifest="$(mktemp)"
+          trap 'rm -f "$manifest"' EXIT
+          {
+            printf '{"tag":"%s","commit":"%s","files":[' "$TAG" "$COMMIT"
+            first=true
+            while IFS= read -r file; do
+              name="$(basename "$file")"
+              sum="$(sha256sum "$file" | awk '{print $1}')"
+              if [ "$first" = true ]; then first=false; else printf ','; fi
+              printf '{"name":"%s","sha256":"%s"}' "$name" "$sum"
+            done < <(find dist -maxdepth 1 -type f ! -name manifest.json -print | sort)
+            printf ']}\n'
+          } > "$manifest"
+          node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' "$manifest"
+          mv "$manifest" dist/manifest.json
+          trap - EXIT
+      - name: Upload immutable artifacts
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-${{ needs.preflight.outputs.tag }}-${{ needs.preflight.outputs.commit }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+  attest:
+    name: Attest release artifacts
+    needs: [preflight, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download immutable artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact }}
+          path: dist
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45
+        with:
+          subject-path: dist/*
+
+  promote:
+    name: Promote production release
+    needs: [preflight, build, attest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: production
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Download immutable artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact }}
+          path: dist
+      - name: Publish GitHub Release assets idempotently
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256_file() { sha256sum "$1" | awk '{print $1}'; }
+          else
+            sha256_file() { shasum -a 256 "$1" | awk '{print $1}'; }
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; upload only missing assets"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          fi
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          for file in dist/*; do
+            name="$(basename "$file")"
+            existing="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -Fx "$name" || true)"
+            if [ -n "$existing" ]; then
+              rm -f "$tmp_dir/$name"
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$tmp_dir" --clobber
+              [ "$(sha256_file "$file")" = "$(sha256_file "$tmp_dir/$name")" ] || {
+                echo "existing release asset has a different digest: $name" >&2
+                exit 1
+              }
+              echo "Release asset already matches: $name"
+            else
+              gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
+
+      - name: Configure npm token
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish exact npm tarball
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$NODE_AUTH_TOKEN" || { echo 'NPM_TOKEN is required in production environment'; exit 1; }
+          tarball="dist/ainovel-cli-vn-${VERSION}.tgz"
+          actual_sha1="$(shasum -a 1 "$tarball" | awk '{print $1}')"
+          existing_sha1="$(npm view "ainovel-cli-vn@${VERSION}" dist.shasum 2>/dev/null || true)"
+          if [ -n "$existing_sha1" ]; then
+            [ "$existing_sha1" = "$actual_sha1" ] || {
+              echo "npm version ${VERSION} exists with a different tarball digest" >&2
+              exit 1
+            }
+            echo "npm version ${VERSION} already matches the release tarball"
+          else
+            npm publish "$tarball" --access public --provenance
+          fi
+
+      - name: Verify exact npm tarball
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: test "$(npm view ainovel-cli-vn@$VERSION version)" = "$VERSION"
+
+
+  postpublish:
+    name: Post-publish registry check
+    needs: [preflight, promote]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Verify npm registry version
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: test "$(npm view ainovel-cli-vn@$VERSION version)" = "$VERSION"
+      - name: Verify GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length > 0'

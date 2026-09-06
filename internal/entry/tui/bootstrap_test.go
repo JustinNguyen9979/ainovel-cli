@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/bubbles/textarea"
 )
 
@@ -35,7 +36,7 @@ func TestBootstrapCompletedBookLandsOnDoneWorkbench(t *testing.T) {
 	if got.mode != modeDone {
 		t.Fatalf("完结书应落完成态工作台，得 mode=%v", got.mode)
 	}
-	if got.textarea.Placeholder != donePlaceholder {
+	if got.textarea.Placeholder != utils.T(utils.LanguageVI, utils.MsgDonePlaceholder) {
 		t.Fatalf("应给出完成态引导（含 /reopen），得 %q", got.textarea.Placeholder)
 	}
 

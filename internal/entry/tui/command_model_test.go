@@ -3,8 +3,9 @@ package tui
 import (
 	"testing"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type fakeModelRuntime struct {
@@ -69,6 +70,26 @@ func TestModelSwitchKeepsUnrepresentableThinkingIntent(t *testing.T) {
 }
 
 // 用户在面板里显式改动强度，则应回写为新值。
+func TestModelSwitchAcceptsCoCreateRole(t *testing.T) {
+	if got := normalizeRoleKey("cocreate"); got != "cocreate" {
+		t.Fatalf("normalizeRoleKey(cocreate) = %q", got)
+	}
+	rt := &fakeModelRuntime{
+		providers:   []string{"proxy"},
+		models:      map[string][]host.ConfiguredModel{"proxy": {{Name: "cocreate-model"}}},
+		curProvider: "proxy", curModel: "cocreate-model",
+		thinking:  map[string]string{"cocreate": ""},
+		available: []agentcore.ThinkingLevel{"low", "high"},
+	}
+	state := newModelSwitchState(rt, "cocreate", utils.LanguageVI)
+	if state.role() != "cocreate" {
+		t.Fatalf("role = %q", state.role())
+	}
+	if state.roleLabel() != "CoCreate" {
+		t.Fatalf("role label = %q", state.roleLabel())
+	}
+}
+
 func TestModelSwitchAppliesExplicitThinkingChange(t *testing.T) {
 	rt := &fakeModelRuntime{
 		providers:   []string{"proxy"},

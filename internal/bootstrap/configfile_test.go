@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/errs"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/errs"
 )
 
 const validGlobal = `{
@@ -143,6 +143,20 @@ func TestLoadConfig_ValidMergeWorks(t *testing.T) {
 	}
 	if got := cfg.Roles["writer"].ReasoningEffort; got != "low" {
 		t.Errorf("roles.writer.reasoning_effort 应被项目级覆盖，得到 %q", got)
+	}
+}
+
+func TestMergeConfigRoleReasoningAndFallbacks(t *testing.T) {
+	base := Config{Roles: map[string]RoleConfig{"cocreate": {
+		Provider: "base", Model: "base-model", ReasoningEffort: "low",
+		Fallbacks: []ModelRef{{Provider: "base", Model: "fallback"}},
+	}}}
+	overlay := Config{Roles: map[string]RoleConfig{"cocreate": {
+		ReasoningEffort: "high", Fallbacks: []ModelRef{{Provider: "overlay", Model: "fallback"}},
+	}}}
+	got := mergeConfig(base, overlay).Roles["cocreate"]
+	if got.ReasoningEffort != "high" || got.Fallbacks[0].Provider != "overlay" {
+		t.Fatalf("merged cocreate role = %#v", got)
 	}
 }
 

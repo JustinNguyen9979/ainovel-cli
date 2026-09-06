@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/revision"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/revision"
 )
 
 type revisionDoneMsg struct {
@@ -24,7 +25,7 @@ func startRevisionSync(rt *host.Host, args []string) (tea.Cmd, bool, error) {
 		case "--check":
 			checkOnly = true
 		default:
-			return nil, false, fmt.Errorf("tham số không hợp lệ %q (hỗ trợ: --check)", arg)
+			return nil, false, fmt.Errorf("未知参数 %q（支持：--check）", arg)
 		}
 	}
 	return func() tea.Msg {
@@ -37,27 +38,28 @@ func startRevisionSync(rt *host.Host, args []string) (tea.Cmd, bool, error) {
 	}, checkOnly, nil
 }
 
-func formatRevisionResult(result *revision.Result) string {
+func formatRevisionResult(result *revision.Result, languages ...utils.Language) string {
+	lang := resolveLanguage(languages)
 	if result == nil || len(result.Applied) == 0 {
-		return "Không phát hiện chương nào bị chỉnh sửa từ bên ngoài"
+		return ui(lang, "未检测到章节外部修改", "Không phát hiện chương bị sửa bên ngoài")
 	}
 	parts := make([]string, 0, len(result.Analyses))
 	for i, analysis := range result.Analyses {
 		if i >= len(result.Applied) {
 			break
 		}
-		part := fmt.Sprintf("Chương %d: %s", result.Applied[i], analysis.ChangeSummary)
+		part := fmt.Sprintf(ui(lang, "第%d章：%s", "Chương %d: %s"), result.Applied[i], analysis.ChangeSummary)
 		if analysis.StoryChanged {
-			part += " (sự thật cốt truyện đã cập nhật)"
+			part += ui(lang, "（剧情事实已更新）", " (sự kiện truyện đã cập nhật)")
 		}
 		if len(analysis.DownstreamIssues) > 0 {
-			part += fmt.Sprintf(" (phát hiện %d xung đột phía sau)", len(analysis.DownstreamIssues))
+			part += fmt.Sprintf(ui(lang, "（发现%d项后续冲突）", " (%d xung đột phía sau)"), len(analysis.DownstreamIssues))
 		}
 		parts = append(parts, part)
 	}
-	summary := fmt.Sprintf("Đã tiếp nhận tu chỉnh các chương: %v", result.Applied)
+	summary := fmt.Sprintf(ui(lang, "已接纳章节修订：%v", "Đã tiếp nhận sửa đổi chương: %v"), result.Applied)
 	if len(parts) > 0 {
-		summary += "; " + strings.Join(parts, "; ")
+		summary += ui(lang, "；", "; ") + strings.Join(parts, ui(lang, "；", "; "))
 	}
 	return summary
 }

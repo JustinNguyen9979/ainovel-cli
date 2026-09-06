@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
 )
 
 func newTestCheckpointStore(t *testing.T) (*CheckpointStore, string) {
@@ -231,9 +231,6 @@ func TestCheckpointStore_ConcurrentAppend(t *testing.T) {
 }
 
 func TestCheckpointStore_SeqNotConsumedOnWriteFailure(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root user ignores readonly file permissions")
-	}
 	cs, dir := newTestCheckpointStore(t)
 	if _, err := cs.Append(domain.ChapterScope(1), "plan", "p", "sha256:1"); err != nil {
 		t.Fatalf("seed append: %v", err)

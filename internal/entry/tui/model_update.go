@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/entry/startup"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host/imp"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/internal/entry/startup"
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/host/imp"
-	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 const maxPromptEventCols = 160
@@ -120,8 +121,8 @@ func (m Model) toggleMouseReporting() (Model, tea.Cmd) {
 	return m, tea.EnableMouseCellMotion
 }
 
-// donePlaceholder hoàn thành tác phẩm
-const donePlaceholder = "Truyện đã hoàn thành · Có thể nhập yêu cầu sửa đổi (vd: \"viết lại chương 3\"), /reopen để viết tiếp tập mới, hoặc /export để xuất truyện"
+// donePlaceholder 完成态输入框提示：会话内完结（doneMsg）与重启进完结书（bootstrap）共用。
+const donePlaceholder = "创作已完成 · 可输入返工要求(如\"重写第3章\")、/reopen 续写新卷、/export 导出"
 
 // enterRunning 进入创作工作台：开启鼠标上报（工作台需要点击切面板 / 滚轮 /
 // 拖拽侧边栏）。返回的命令需由调用方 Batch 进最终返回值。
@@ -211,7 +212,7 @@ func (m Model) handleBaseKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.startupMode = startupModeQuick
 			}
-			m.textarea.Placeholder = placeholderForNewMode(m.startupMode)
+			m.textarea.Placeholder = localizedModePlaceholder(m.startupMode, m.language)
 			return m, nil
 		}
 		m.focusPane = (m.focusPane + 1) % focusPaneCount
@@ -312,7 +313,7 @@ func (m Model) handleEnterKey() (tea.Model, tea.Cmd) {
 			cmd := m.enterStarting(prompt)
 			return m, tea.Batch(startRuntime(m.runtime, prompt), cmd)
 		}
-		m.cocreate = newCoCreateState(text)
+		m.cocreate = newCoCreateState(text, m.language)
 		return m, m.sendCoCreate()
 	case modeRunning:
 		// 不本地回显 USER 事件 —— Host.Continue/Steer 入口已 emit "USER" 事件，
@@ -438,7 +439,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		if (msg.existing || msg.resumed) && m.mode == modeNew && !msg.completed {
 			enableMouse := m.enterRunning()
 			m.resizeTextarea()
-			m.textarea.Placeholder = defaultSteerPlaceholder()
+			m.textarea.Placeholder = m.localizedSteerPlaceholder()
 			if msg.err != nil {
 				m.err = msg.err
 			}
@@ -450,7 +451,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			enableMouse := m.enterRunning()
 			m.mode = modeDone
 			m.resizeTextarea()
-			m.textarea.Placeholder = donePlaceholder
+			m.textarea.Placeholder = m.localizedDonePlaceholder()
 			if msg.err != nil {
 				m.err = msg.err
 			}
@@ -460,7 +461,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		if msg.resumed && m.mode == modeDone {
 			enableMouse := m.enterRunning()
 			m.resizeTextarea()
-			m.textarea.Placeholder = defaultSteerPlaceholder()
+			m.textarea.Placeholder = m.localizedSteerPlaceholder()
 			return m, tea.Batch(fetchSnapshot(m.runtime), enableMouse), true
 		}
 		if msg.err != nil {
@@ -493,7 +494,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			// 完成态不锁输入框：停止自动续写，但用户仍可输入返工要求（modeDone 输入经
 			// Continue 唤醒新一轮 run，Arbiter 裁定返工或继续创作；/export、/model
 			// 等命令也需可用，输入框必须保持聚焦（issue #27、#38）。
-			m.textarea.Placeholder = donePlaceholder
+			m.textarea.Placeholder = m.localizedDonePlaceholder()
 			return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime), m.textarea.Focus()), true
 		}
 		if m.abortPending {
@@ -501,13 +502,13 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			m.snapshot.RuntimeState = "paused"
 			m.syncRuntimePlaceholder()
 		} else {
-			m.textarea.Placeholder = "Sáng tác bị gián đoạn, nhập nội dung bất kỳ để tiếp tục"
+			m.textarea.Placeholder = utils.T(m.language, utils.MsgCreationInterrupted)
 		}
 		return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime)), true
 	case abortResultMsg:
 		if msg.stopped {
 			m.abortPending = true
-			m.textarea.Placeholder = "Đang tạm dừng sáng tác..."
+			m.textarea.Placeholder = utils.T(m.language, utils.MsgCreationPausing)
 		}
 		return m, nil, true
 	case reportLoadedMsg:
@@ -528,16 +529,21 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		}
 		if msg.ev.Stage == imp.StageDone {
 			if msg.ev.Continued {
+				// host 已真实启动 Engine 自动接力（Continued 由 host 依权威决策置位，非 TUI 臆测）。
+				// 关面板落到工作台，由 Init 常驻的 listenEvents/listenDone 承接引擎事件，tickSnapshot 刷新运行态。
 				m.importer = nil
 				enableMouse := m.enterRunning()
 				m.resizeTextarea()
-				m.textarea.Placeholder = defaultSteerPlaceholder()
+				m.textarea.Placeholder = m.localizedSteerPlaceholder()
 				return m, tea.Batch(enableMouse, m.textarea.Focus()), true
 			}
+			// 未接力（默认/审阅/接力失败）：停在面板等用户核对 Foundation 与章节，Esc 关闭。
 			return m, nil, true
 		}
 		return m, listenImportEvent(msg.reqID, msg.ch), true
 	case importClosedMsg:
+		// 通道关闭且未终态 → 管线在 awaiting 处停下（等 --yes / --story）。标记面板可关闭，
+		// 否则 Esc 只会取消已结束的 ctx，面板永远关不掉（卡死）。
 		if m.importer == nil || msg.reqID != m.importer.reqID || m.importer.done {
 			return m, nil, true
 		}
@@ -558,26 +564,42 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case exportDoneMsg:
 		if msg.err != nil {
 			m.applyEvent(host.Event{
-				Time: time.Now(), Category: "ERROR", Summary: "Xuất file thất bại: " + msg.err.Error(), Level: "error",
+				Time: time.Now(), Category: "ERROR", Summary: ui(m.language, "导出失败：", "Xuất thất bại: ") + msg.err.Error(), Level: "error",
 			})
 		} else if msg.result != nil {
 			m.applyEvent(host.Event{
-				Time: time.Now(), Category: "SYSTEM", Summary: formatExportSuccess(msg.result), Level: "success",
+				Time: time.Now(), Category: "SYSTEM", Summary: formatExportSuccess(msg.result, m.language), Level: "success",
 			})
 		}
 		m.refreshEventViewport()
 		return m, nil, true
+	case updateCheckMsg:
+		if msg.err != nil {
+			message := "Kiểm tra phiên bản khi khởi động thất bại"
+			if msg.result != nil {
+				message = "Kiểm tra phiên bản khi khởi động hoàn tất nhưng cache bất thường"
+			}
+			slog.Warn(message, "module", "version", "err", msg.err)
+		}
+		if msg.result == nil || !msg.result.UpdateAvailable {
+			return m, nil, true
+		}
+		notice := formatUpdateNotice(msg.result)
+		m.updateHint = notice
+		m.applyEvent(host.Event{Time: time.Now(), Category: "SYSTEM", Level: "info", Summary: notice})
+		m.refreshEventViewport()
+		return m, nil, true
 	case revisionDoneMsg:
 		if msg.err != nil {
-			m.applyEvent(host.Event{Time: time.Now(), Category: "ERROR", Summary: "Đồng bộ chương thất bại: " + msg.err.Error(), Level: "error"})
+			m.applyEvent(host.Event{Time: time.Now(), Category: "ERROR", Summary: ui(m.language, "章节同步失败：", "Đồng bộ chương thất bại: ") + msg.err.Error(), Level: "error"})
 		} else if msg.checkOnly {
-			summary := "Không phát hiện chương nào bị chỉnh sửa từ bên ngoài"
+			summary := ui(m.language, "未检测到章节外部修改", "Không phát hiện chương bị sửa bên ngoài")
 			if len(msg.chapters) > 0 {
-				summary = fmt.Sprintf("Phát hiện chính văn chương đã bị chỉnh sửa từ bên ngoài: %v; Chạy /sync để tiếp nhận", msg.chapters)
+				summary = fmt.Sprintf(ui(m.language, "检测到章节正文已被外部修改：%v；执行 /sync 接纳", "Phát hiện nội dung chương bị sửa bên ngoài: %v; chạy /sync để tiếp nhận"), msg.chapters)
 			}
 			m.applyEvent(host.Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "info"})
 		} else {
-			m.applyEvent(host.Event{Time: time.Now(), Category: "SYSTEM", Summary: formatRevisionResult(msg.result), Level: "success"})
+			m.applyEvent(host.Event{Time: time.Now(), Category: "SYSTEM", Summary: formatRevisionResult(msg.result, m.language), Level: "success"})
 		}
 		m.refreshEventViewport()
 		return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus()), true
@@ -598,12 +620,14 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		}
 		m.modelConfig.testing = false
 		m.modelConfig.testCancel = nil
+		m.modelConfig.messageSuccess = false
 		if errors.Is(msg.err, context.Canceled) {
-			m.modelConfig.message = "Kiểm tra kết nối đã bị hủy"
+			m.modelConfig.message = ui(m.language, "连接测试已取消", "Đã hủy kiểm tra kết nối")
 		} else if msg.err != nil {
 			m.modelConfig.message = msg.err.Error()
 		} else {
-			m.modelConfig.message = "Kiểm tra kết nối thành công: " + msg.model
+			m.modelConfig.message = ui(m.language, "连接测试成功：", "Kiểm tra kết nối thành công: ") + msg.model
+			m.modelConfig.messageSuccess = true
 		}
 		return m, nil, true
 	case startResultMsg:
@@ -636,7 +660,7 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus()), true
 		}
 		m.err = nil
-		m.textarea.Placeholder = defaultSteerPlaceholder()
+		m.textarea.Placeholder = m.localizedSteerPlaceholder()
 		return m, tea.Batch(fetchSnapshot(m.runtime), listenDone(m.runtime), m.textarea.Focus()), true
 	case spinnerTickMsg:
 		m.spinnerIdx = (m.spinnerIdx + 1) % len(spinnerFrames)
@@ -737,7 +761,7 @@ func (m Model) handleStartResultMsg(msg startResultMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.cocreate != nil {
 			m.cocreate.awaiting = false
-			m.textarea.Placeholder = placeholderForCoCreate(m.cocreate)
+			m.textarea.Placeholder = localizedCoCreatePlaceholder(m.cocreate, m.language)
 			return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus())
 		}
 		if wasStarting {
@@ -746,13 +770,13 @@ func (m Model) handleStartResultMsg(msg startResultMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeRunning
 			m.snapshot.IsRunning = false
 			m.snapshot.RuntimeState = "idle"
-			m.textarea.Placeholder = "Khởi tạo thất bại, vui lòng kiểm tra cấu hình hoặc dùng /model để đổi model"
+			m.textarea.Placeholder = ui(m.language, "启动失败，请检查模型配置或使用 /model 切换模型", "Khởi động thất bại, hãy kiểm tra cấu hình model hoặc dùng /model để chuyển model")
 			m.refreshStreamViewport()
 			m.refreshStateViewport()
 			return m, m.textarea.Focus()
 		}
 		if m.mode == modeNew {
-			m.textarea.Placeholder = placeholderForNewMode(m.startupMode)
+			m.textarea.Placeholder = localizedModePlaceholder(m.startupMode, m.language)
 			return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus())
 		}
 		return m, fetchSnapshot(m.runtime)
@@ -763,7 +787,7 @@ func (m Model) handleStartResultMsg(msg startResultMsg) (tea.Model, tea.Cmd) {
 		m.cocreate = nil
 		enableMouse := m.enterRunning()
 		m.resizeTextarea()
-		m.textarea.Placeholder = defaultSteerPlaceholder()
+		m.textarea.Placeholder = m.localizedSteerPlaceholder()
 		return m, tea.Batch(fetchSnapshot(m.runtime), m.textarea.Focus(), enableMouse)
 	}
 
@@ -779,10 +803,10 @@ func (m *Model) enterStarting(rawPrompt string) tea.Cmd {
 	enableMouse := m.enterRunning()
 	m.resetOutputPanels()
 	m.resizeTextarea()
-	m.textarea.Placeholder = "Đang khởi tạo sáng tác..."
+	m.textarea.Placeholder = utils.T(m.language, utils.MsgStartingQuick)
 	m.applyStartupPromptEvent(rawPrompt)
 	m.applyEvent(host.Event{
-		Time: time.Now(), Category: "SYSTEM", Summary: "Đang khởi tạo sáng tác", Level: "info",
+		Time: time.Now(), Category: "SYSTEM", Summary: utils.T(m.language, utils.MsgStartingCreation), Level: "info",
 	})
 	m.refreshEventViewport()
 	m.refreshStreamViewport()
@@ -798,7 +822,7 @@ func (m *Model) applyStartupPromptEvent(rawPrompt string) {
 	m.applyEvent(host.Event{
 		Time:     time.Now(),
 		Category: "USER",
-		Summary:  "Yêu cầu sáng tác: " + truncate(text, maxPromptEventCols),
+		Summary:  ui(m.language, "创作需求: ", "Yêu cầu sáng tác: ") + truncate(text, maxPromptEventCols),
 		Detail:   text,
 		Level:    "info",
 	})
@@ -811,12 +835,12 @@ func (m Model) handleCoCreateDoneMsg(msg cocreateDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.err = msg.err
 		m.cocreate.awaiting = false
-		m.textarea.Placeholder = placeholderForCoCreate(m.cocreate)
+		m.textarea.Placeholder = localizedCoCreatePlaceholder(m.cocreate, m.language)
 		return m, m.textarea.Focus()
 	}
 	m.err = nil
 	m.cocreate.apply(msg.reply)
-	m.textarea.Placeholder = placeholderForCoCreate(m.cocreate)
+	m.textarea.Placeholder = localizedCoCreatePlaceholder(m.cocreate, m.language)
 	return m, m.textarea.Focus()
 }
 

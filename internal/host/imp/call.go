@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/llmcontract"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/llmretry"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/llmcontract"
-	"github.com/voocel/ainovel-cli/internal/llmretry"
 	"github.com/voocel/litellm"
 )
 

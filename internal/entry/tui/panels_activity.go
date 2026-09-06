@@ -5,19 +5,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // renderEventContent 将事件列表渲染为层次化事件流。
 // DISPATCH 作为顶级标题，子代理工具缩进显示，形成清晰的调度树。
 // spinnerFrame 用于给"进行中"的行渲染动态图标（跟 topbar spinner 同步）。
-func renderEventContent(events []host.Event, width, spinnerFrame int) string {
+func renderEventContent(events []host.Event, width, spinnerFrame int, languages ...utils.Language) string {
 	var b strings.Builder
 	for i, ev := range events {
-		b.WriteString(renderEventLine(ev, width, spinnerFrame))
+		b.WriteString(renderEventLine(ev, width, spinnerFrame, languages...))
 		if i < len(events)-1 {
 			b.WriteString("\n")
 		}
@@ -32,7 +32,7 @@ func runningSpinner(frame int) string {
 	return eventRunningFrames[frame%len(eventRunningFrames)]
 }
 
-func renderEventLine(ev host.Event, width, spinnerFrame int) string {
+func renderEventLine(ev host.Event, width, spinnerFrame int, languages ...utils.Language) string {
 	tsStr := lipgloss.NewStyle().Foreground(colorDim).Render(ev.Time.Format("15:04:05"))
 	indent := ""
 	if ev.Depth > 0 {
@@ -120,7 +120,7 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 			sumColor = colorAccent
 		}
 		text := truncate(ev.Summary, maxSumW)
-		if cd := retryCountdown(ev.RetryAt, time.Now()); cd != "" {
+		if cd := retryCountdown(ev.RetryAt, time.Now(), languages...); cd != "" {
 			cd = " · " + cd
 			text = truncate(ev.Summary, max(20, maxSumW-lipgloss.Width(cd))) + cd
 		}
@@ -158,7 +158,7 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 // retryCountdown 返回重试倒计时文案（"7s 后重试"）；未设截止或已到点（请求已在途）返回空。
 // 事件只携带截止时刻，剩余秒数在渲染时计算——spinner tick 驱动重绘即形成逐秒倒数，
 // 事件面板与导入面板共用（对齐"同 ID/Key 一行跳动"的原地更新机制）。
-func retryCountdown(retryAt, now time.Time) string {
+func retryCountdown(retryAt, now time.Time, languages ...utils.Language) string {
 	if retryAt.IsZero() {
 		return ""
 	}
@@ -167,7 +167,10 @@ func retryCountdown(retryAt, now time.Time) string {
 		return ""
 	}
 	secs := int((remain + time.Second - 1) / time.Second)
-	return fmt.Sprintf("Thử lại sau %ds", secs)
+	if resolveLanguage(languages) == utils.LanguageZH {
+		return fmt.Sprintf("%ds 后重试", secs)
+	}
+	return fmt.Sprintf("%ds sau sẽ thử lại", secs)
 }
 
 // renderDispatchSummary 渲染 DISPATCH 摘要：Agent 名用角色色，任务用淡色。
@@ -267,13 +270,13 @@ func renderEventSparkle(frame, width int) string {
 }
 
 // renderEventFlowViewport 用 viewport 包装渲染事件流面板。
-func renderEventFlowViewport(vp viewport.Model, width, height int, focused bool) string {
+func renderEventFlowViewport(vp viewport.Model, width, height int, focused bool, languages ...utils.Language) string {
 	// 标题栏
 	titleColor := colorDim
 	if focused {
 		titleColor = colorAccent
 	}
-	title := lipgloss.NewStyle().Foreground(titleColor).Render(":: Nhật Ký Tiến Độ (Activity Stream)")
+	title := lipgloss.NewStyle().Foreground(titleColor).Render(":: " + tr(languages, utils.MsgEventStream))
 	lineW := width - lipgloss.Width(title) - 4
 	if lineW < 0 {
 		lineW = 0
@@ -294,9 +297,11 @@ func renderEventFlowViewport(vp viewport.Model, width, height int, focused bool)
 }
 
 // renderStreamPanel 渲染流式输出面板（中间列下半部分）。
-func renderStreamPanel(vp viewport.Model, width, height int, focused, running bool, frame int) string {
+func renderStreamPanel(vp viewport.Model, width, height int, focused, running bool, frame int, languages ...utils.Language) string {
+	// 分隔标题栏（始终醒目）：粗竖条前缀 + 永远 Bold + 强调色，避免与思考的淡灰斜体撞色
+	// focused 时额外下划线，区分焦点态。
 	titleStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Underline(focused)
-	title := titleStyle.Render("▍Luồng Viết Trực Tiếp (Live Stream)")
+	title := titleStyle.Render("▍" + tr(languages, utils.MsgLiveOutput))
 	if running {
 		status := renderStreamActivity(frame)
 		title += " " + status

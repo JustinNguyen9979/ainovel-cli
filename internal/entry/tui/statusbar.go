@@ -4,8 +4,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 // renderStatusBar 渲染屏幕最底部的用量状态栏，占用输入区原有的末尾空行（零额外高度）：
@@ -15,7 +16,8 @@ import (
 // 定位是"一眼看开销"：为之付费的模型身份、会话累计令牌、花费与预算逼近告警。
 // 数据来自 3s 轮询的 UISnapshot（每次模型调用完成 usage 即累计入账）；
 // per-role/per-model 明细与缓存诊断仍由左侧栏承载，这里不重复。
-func renderStatusBar(snap host.UISnapshot, outputDir string, width int) string {
+func renderStatusBar(snap host.UISnapshot, outputDir string, width int, languages ...utils.Language) string {
+	lang := resolveLanguage(languages)
 	dim := lipgloss.NewStyle().Foreground(colorDim)
 	val := lipgloss.NewStyle().Foreground(colorMuted)
 
@@ -61,7 +63,7 @@ func renderStatusBar(snap host.UISnapshot, outputDir string, width int) string {
 			s += dim.Render("/" + formatCostUSD(snap.BudgetLimitUSD))
 		}
 		if saved := formatCostUSD(snap.TotalSavedUSD); saved != "" {
-			s += dim.Render(" (tiết kiệm " + saved + ")")
+			s += dim.Render(" " + ui(lang, "节省", "tiết kiệm") + saved)
 		}
 		segs = append(segs, s)
 	}
@@ -72,7 +74,7 @@ func renderStatusBar(snap host.UISnapshot, outputDir string, width int) string {
 		right = dim.Render("./" + filepath.Base(outputDir))
 	}
 	if left == "" && right == "" {
-		return dim.Render("SẴN SÀNG")
+		return dim.Render(localizedStatusLabel(lang, "READY"))
 	}
 	return joinInlineSides(left, right, width)
 }

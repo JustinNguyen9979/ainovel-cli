@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/logger"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/logger"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // prompt/schema 版本纳入各阶段 InputDigest；升级 prompt 契约时递增以自然失效下游工件。

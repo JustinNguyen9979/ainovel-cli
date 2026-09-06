@@ -3,9 +3,9 @@ version: 2
 
 before:
   hooks:
-    - go mod tidy
     - go vet ./...
-    - go test -count=1 ./...
+    - go test -buildvcs=false -count=1 ./...
+    - go build -trimpath -o /tmp/ainovel-cli-release-check ./cmd/ainovel-cli
 
 builds:
   - id: ainovel-cli
@@ -72,5 +72,8 @@ changelog:
 
 release:
   github:
-    owner: voocel
+    owner: JustinNguyen9979
     name: ainovel-cli
+    draft: true
+    prerelease: auto
+    mode: replace

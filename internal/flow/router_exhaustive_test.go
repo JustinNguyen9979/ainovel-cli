@@ -11,8 +11,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	storepkg "github.com/JustinNguyen9979/ainovel-cli/internal/store"
 )
 
 // expectKind 是规格层面的裁定结果：路由到谁、做什么类别的事。
@@ -91,47 +91,40 @@ func expectedInstruction(s State) expectKind {
 }
 
 // classify 把实现返回的 Instruction 归到规格类别；不认识的组合直接失败。
-func classify(t *testing.T, inst *Instruction) expectKind {
+func classify(t *testing.T, s State, inst *Instruction) expectKind {
 	t.Helper()
 	if inst == nil {
 		return expectNil
 	}
 	switch inst.Agent {
 	case "writer":
-		switch {
-		case contains(inst.Task, "重写") || contains(inst.Task, "打磨"):
+		if len(s.Progress.PendingRewrites) > 0 {
 			return expectRewrite
-		case contains(inst.Task, "写第"):
+		}
+		if inst.Chapter > 0 {
 			return expectNextChapter
 		}
 	case "editor":
 		switch {
-		case contains(inst.Task, "弧级评审"):
+		case contains(inst.Task, "scope=arc"):
 			return expectArcReview
-		case contains(inst.Task, "全局审阅"):
+		case contains(inst.Task, "scope=global"):
 			return expectGlobalReview
 		case contains(inst.Task, "save_arc_summary"):
 			return expectArcSummary
 		case contains(inst.Task, "save_volume_summary"):
 			return expectVolumeSummary
 		}
-	case "architect_long":
+	case "architect_long", "architect_short":
 		switch {
-		case contains(inst.Task, "补齐基础设定"):
-			return expectFoundationFill
 		case contains(inst.Task, "writer_feedback"):
 			return expectOutlineFeedback
 		case contains(inst.Task, "expand_arc"):
 			return expectExpandArc
 		case contains(inst.Task, "append_volume"):
 			return expectNewVolume
-		}
-	case "architect_short":
-		if contains(inst.Task, "补齐基础设定") {
+		case contains(inst.Task, "save_foundation") || contains(inst.Task, "audit_foundation"):
 			return expectFoundationFill
-		}
-		if contains(inst.Task, "writer_feedback") {
-			return expectOutlineFeedback
 		}
 	}
 	t.Fatalf("无法归类的指令：agent=%q task=%q", inst.Agent, inst.Task)
@@ -261,7 +254,7 @@ func TestRoute_ExhaustiveAgainstSpec(t *testing.T) {
 												before := snapshotState(s)
 												inst := Route(s)
 												want := expectedInstruction(s)
-												got := classify(t, inst)
+												got := classify(t, s, inst)
 												if got != want {
 													t.Fatalf("phase=%s flow=%s queue=%v layered=%v completed=%v missing=%v tier=%q global=%v boundary=%s:\n规格期望 %d，实现返回 %d（inst=%+v）",
 														phase, fl, queue, layered, completed, missing, tier, hasGlobal, bc.name, want, got, inst)
@@ -305,8 +298,8 @@ func assertConservation(t *testing.T, s State, inst *Instruction) {
 		if s.PlanningTier == domain.PlanningTierShort {
 			wantPlanner = "architect_short"
 		}
-		if inst.Agent != wantPlanner || !contains(inst.Task, "补齐基础设定") || inst.Chapter != 0 {
-			t.Fatalf("规划期指令必须是补齐派单且规划师匹配 tier=%q：%+v", s.PlanningTier, inst)
+		if inst.Agent != wantPlanner || (!contains(inst.Task, "save_foundation") && !contains(inst.Task, "audit_foundation")) || inst.Chapter != 0 {
+			t.Fatalf("规划期指令必须包含 save_foundation 且规划师匹配 tier=%q：%+v", s.PlanningTier, inst)
 		}
 		return
 	}
@@ -319,9 +312,9 @@ func assertConservation(t *testing.T, s State, inst *Instruction) {
 			if inst.Chapter != p.PendingRewrites[0] {
 				t.Fatalf("重写队列非空时必须派队列头 %d，got %d", p.PendingRewrites[0], inst.Chapter)
 			}
-			wantVerb := "重写"
+			wantVerb := "Viết lại"
 			if p.Flow == domain.FlowPolishing {
-				wantVerb = "打磨"
+				wantVerb = "Đánh bóng"
 			}
 			if !contains(inst.Task, wantVerb) {
 				t.Fatalf("队列任务动词应为 %q：%q", wantVerb, inst.Task)

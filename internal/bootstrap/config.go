@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/errs"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/models"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/notify"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/voocel/agentcore/llm"
-	"github.com/voocel/ainovel-cli/internal/errs"
-	"github.com/voocel/ainovel-cli/internal/models"
-	"github.com/voocel/ainovel-cli/internal/notify"
-	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 // DefaultContextWindow 模型未在 registry 登记时的兜底窗口大小。
@@ -194,6 +194,7 @@ var knownRoles = map[string]bool{
 	"import_segment":    true,
 	"import_analyze":    true,
 	"import_synthesize": true,
+	"cocreate":          true,
 }
 
 // Config 小说应用配置。
@@ -202,8 +203,9 @@ type Config struct {
 	OutputDir string `json:"-"` // 输出根目录
 
 	// 默认 LLM 配置
-	Provider  string `json:"provider"` // 默认 provider（Providers map 中的 key）
-	ModelName string `json:"model"`    // 默认模型名
+	Provider  string `json:"provider"`           // 默认 provider（Providers map 中的 key）
+	ModelName string `json:"model"`              // 默认模型名
+	Language  string `json:"language,omitempty"` // 用户界面语言（vi/zh）
 	// ReasoningEffort 顶层默认推理强度（off/low/medium/high/xhigh/max），空=不覆盖（沿用模型/provider 默认）。
 	// 角色未单独配置 reasoning_effort 时回落到此值。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
@@ -215,10 +217,10 @@ type Config struct {
 	Roles map[string]RoleConfig `json:"roles,omitempty"`
 
 	// 创作参数
-	Style    string `json:"style,omitempty"`
-	Language string `json:"language,omitempty"` // Ngôn ngữ sáng tác tiểu thuyết: "vi" (Tiếng Việt, mặc định) hoặc "zh" (Tiếng Trung)
+	Style string `json:"style,omitempty"`
 
-	// ContextWindow là cửa sổ ngữ cảnh toàn cục phiên bản cũ, giữ lại để tương thích.
+	// ContextWindow 是旧版全局上下文窗口，保留为模型专属 context_window 之后的
+	// 兼容回退。仅影响压缩阈值，不改变 LLM API 实际请求长度。
 	ContextWindow int `json:"context_window,omitempty"`
 
 	// Budget 单本书的成本预算政策；book_usd > 0 才启用。
@@ -226,6 +228,9 @@ type Config struct {
 
 	// Notify 无人值守告警配置；缺省启用（system 通道兜底）。
 	Notify NotifyConfig `json:"notify,omitzero"`
+
+	// DisableUpdateCheck 关闭启动时的版本检查提醒；默认开启。
+	DisableUpdateCheck bool `json:"disable_update_check,omitempty"`
 }
 
 // BudgetConfig 是用户对单本书钱包的政策声明。越线停机等同于用户在那一刻
@@ -251,6 +256,9 @@ func (n NotifyConfig) IsEnabled() bool { return n.Enabled == nil || *n.Enabled }
 
 // ValidateBase 校验基础配置。
 func (c *Config) ValidateBase() error {
+	if _, err := utils.ParseLanguage(c.Language); err != nil {
+		return fmt.Errorf("language: %w: %w", err, errs.ErrConfig)
+	}
 	if err := validateConfigText("provider", c.Provider); err != nil {
 		return err
 	}
@@ -303,7 +311,7 @@ func (c *Config) ValidateBase() error {
 			return err
 		}
 		if !knownRoles[role] {
-			return fmt.Errorf("unknown role %q in roles config (valid: architect/writer/editor/import_segment/import_analyze/import_synthesize): %w", role, errs.ErrConfig)
+			return fmt.Errorf("unknown role %q in roles config (valid: architect/writer/editor/import_segment/import_analyze/import_synthesize/cocreate): %w", role, errs.ErrConfig)
 		}
 		if rc.Provider == "" || rc.Model == "" {
 			return fmt.Errorf("role %q must have both provider and model: %w", role, errs.ErrConfig)
@@ -411,6 +419,9 @@ func (c *Config) DefaultProviderConfig() ProviderConfig {
 
 // FillDefaults 填充默认值。
 func (c *Config) FillDefaults() {
+	if c.Language == "" {
+		c.Language = "vi"
+	}
 	if c.OutputDir == "" {
 		c.OutputDir = filepath.Join("output", "novel")
 	}
@@ -423,23 +434,9 @@ func (c *Config) FillDefaults() {
 	if c.Style == "" {
 		c.Style = "default"
 	}
-	if c.Language == "" {
-		c.Language = "vi"
-	} else {
-		c.Language = strings.ToLower(strings.TrimSpace(c.Language))
-	}
 	if c.Budget.Enabled() && c.Budget.WarnRatio == 0 {
 		c.Budget.WarnRatio = 0.8
 	}
-}
-
-// NormalizedLanguage trả về ngôn ngữ nội dung tiểu thuyết đã chuẩn hóa ("vi" hoặc "zh").
-func (c Config) NormalizedLanguage() string {
-	lang := strings.ToLower(strings.TrimSpace(c.Language))
-	if lang == "zh" || lang == "chinese" || lang == "cn" {
-		return "zh"
-	}
-	return "vi"
 }
 
 // ContextWindowSource 标记窗口取值的来源，供日志/诊断使用。

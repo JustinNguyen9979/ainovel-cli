@@ -3,8 +3,8 @@ package tools
 import (
 	"fmt"
 
-	"github.com/voocel/ainovel-cli/internal/chapterfacts"
-	"github.com/voocel/ainovel-cli/internal/errs"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/chapterfacts"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/errs"
 )
 
 // validateCommitArgs 在创建 PendingCommit 前校验模型提交的完整语义载荷。

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/rules"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/rules"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 )
 
 func newTestContextTool(st *store.Store, refs References, style string) *ContextTool {
@@ -591,7 +591,7 @@ func TestProjectLayeredOutlineCompactsOnlyCompletedArcs(t *testing.T) {
 		},
 	}}
 
-	projected := projectLayeredOutlineForPlanning(volumes, 2)
+	projected, _ := projectLayeredOutlineForPlanning(volumes, 2, 1, 2)
 	if got := projected[0].Arcs[0]; got.Status != "completed" || len(got.Chapters) != 0 || got.StartChapter != 1 || got.EndChapter != 2 {
 		t.Fatalf("completed arc projection = %+v", got)
 	}
@@ -649,11 +649,48 @@ func TestContextToolLongLayeredPlanningStaysWithinBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), "关键事件") {
-		t.Fatal("completed chapter details must not remain in architect planning projection")
+	if strings.Count(string(encoded), "关键事件") >= len(completed) {
+		t.Fatal("architect planning projection should focus chapter details instead of retaining every completed chapter")
+	}
+	if _, ok := planning["outline_detail"]; !ok {
+		t.Fatal("focused arc metadata should identify the detailed planning scope")
 	}
 }
 
+func TestContextToolFocusesSkeletonArc(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Outline.SaveLayeredOutline([]domain.VolumeOutline{{Index: 1, Arcs: []domain.ArcOutline{{Index: 1, Title: "Skeleton", Goal: "Goal", EstimatedChapters: 5}}}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := newTestContextTool(s, References{}, "default").Execute(context.Background(), json.RawMessage(`{"volume":1,"arc":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	planning := payload["planning_memory"].(map[string]any)
+	outline := planning["layered_outline"].([]any)
+	arc := outline[0].(map[string]any)["arcs"].([]any)[0].(map[string]any)
+	if arc["status"] != "skeleton" || arc["title"] != "Skeleton" || arc["goal"] != "Goal" || arc["estimated_chapters"] != float64(5) {
+		t.Fatalf("skeleton focus = %#v", arc)
+	}
+}
+
+func TestContextToolRejectsPartialPlanningScope(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := newTestContextTool(s, References{}, "default").Execute(context.Background(), json.RawMessage(`{"volume":1}`))
+	if err == nil || !strings.Contains(err.Error(), "volume and arc") {
+		t.Fatalf("partial planning scope error = %v", err)
+	}
+}
 func TestContextToolWriterDoesNotIncludeWholeOutline(t *testing.T) {
 	s := store.NewStore(t.TempDir())
 	if err := s.Init(); err != nil {

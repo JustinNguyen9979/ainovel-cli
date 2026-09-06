@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 )
 
 func TestCheckConsistencyReturnsPartialFactsWithWarnings(t *testing.T) {

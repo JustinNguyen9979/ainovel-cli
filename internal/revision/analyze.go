@@ -7,11 +7,11 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/chapterfacts"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/schema"
-	"github.com/voocel/ainovel-cli/internal/chapterfacts"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
 var analysisContract = llmcontract.Contract{

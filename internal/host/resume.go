@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/revision"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/revision"
+	storepkg "github.com/JustinNguyen9979/ainovel-cli/internal/store"
 )
 
 func upgradeProject(st *storepkg.Store) error {

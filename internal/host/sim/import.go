@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 )
 
 func ImportProfile(ctx context.Context, st *store.Store, path string) (ImportResult, error) {

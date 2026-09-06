@@ -140,6 +140,12 @@ func mergeConfig(base, overlay Config) Config {
 	if overlay.ModelName != "" {
 		base.ModelName = overlay.ModelName
 	}
+	if overlay.Language != "" {
+		base.Language = overlay.Language
+	}
+	if overlay.DisableUpdateCheck {
+		base.DisableUpdateCheck = true
+	}
 	if overlay.ReasoningEffort != "" {
 		base.ReasoningEffort = overlay.ReasoningEffort
 	}

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
 )
 
 // 故事状态闭集（RFC §10.4）。

@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 )
 
 func mustLoadState(t *testing.T, w *Workspace) Facts {
@@ -154,13 +155,32 @@ func TestGuidanceChangeInvalidatesSegmentation(t *testing.T) {
 
 // TestResumeSummary 守护 §18.2 启动提示：无工作区返回空串；停在半路时给出阶段化描述，
 // 使用户不必等到创作被门禁拒绝才发现这本书停在导入半路。
+func TestResumeSummaryLocalizesVietnamese(t *testing.T) {
+	dir := t.TempDir()
+	st := store.NewStore(dir)
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(dir, "book.txt")
+	if err := os.WriteFile(src, []byte("第一章\n正文\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Ingest(dir, src, Intent{}); err != nil {
+		t.Fatal(err)
+	}
+	got := ResumeSummary(st, utils.LanguageVI)
+	if !strings.Contains(got, "chưa hoàn tất phân đoạn") || strings.Contains(got, "尚未完成切分") {
+		t.Fatalf("Vietnamese resume summary is not localized: %q", got)
+	}
+}
+
 func TestResumeSummary(t *testing.T) {
 	dir := t.TempDir()
 	st := store.NewStore(dir)
 	if err := st.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if got := ResumeSummary(st); got != "" {
+	if got := ResumeSummary(st, utils.LanguageZH); got != "" {
 		t.Fatalf("无导入工作区应返回空串，得 %q", got)
 	}
 	src := filepath.Join(dir, "book.txt")
@@ -171,7 +191,7 @@ func TestResumeSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	if got := ResumeSummary(st); !strings.Contains(got, "尚未完成切分") {
+	if got := ResumeSummary(st, utils.LanguageZH); !strings.Contains(got, "尚未完成切分") {
 		t.Fatalf("刚建区应提示未完成切分，得 %q", got)
 	}
 	// 切分+确认就绪、分析 0/1 → 提示分析进度。
@@ -184,7 +204,7 @@ func TestResumeSummary(t *testing.T) {
 	if err := writeArtifact(ws, fileConfirmation, Digest(raw), Confirmation{Method: confirmMethodAuto, Chapters: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if got := ResumeSummary(st); !strings.Contains(got, "已分析 0/1 章") {
+	if got := ResumeSummary(st, utils.LanguageZH); !strings.Contains(got, "已分析 0/1 章") {
 		t.Fatalf("应提示分析进度，得 %q", got)
 	}
 }
@@ -232,7 +252,7 @@ func TestResumeStatusPublishedIsTerminal(t *testing.T) {
 	if active, done, err := ResumeStatus(st); err != nil || !active || !done {
 		t.Fatalf("已发布书应判导入完成（active=%v done=%v）", active, done)
 	}
-	if got := ResumeSummary(st); got != "" {
+	if got := ResumeSummary(st, utils.LanguageZH); got != "" {
 		t.Fatalf("已发布书不应提示未完成导入，得 %q", got)
 	}
 }

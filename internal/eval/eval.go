@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/ainovel-cli/assets"
-	"github.com/voocel/ainovel-cli/internal/bootstrap"
+	"github.com/JustinNguyen9979/ainovel-cli/assets"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/bootstrap"
 )
 
 // Command 是 `ainovel-cli eval` 子命令入口，返回进程退出码：

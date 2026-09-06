@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/host/imp"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host/imp"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 )
 
 // newFlagTestHost 造一个最小 Host，只够驱动 cocreating 标记状态机与并发守卫。
@@ -184,6 +185,58 @@ func TestStageCoCreate_OccupancyBlocksConcurrentEntries(t *testing.T) {
 	}
 }
 
+func TestCoCreatePromptLocales(t *testing.T) {
+	vi := coCreateSystemPrompt(utils.LanguageVI)
+	if !strings.Contains(vi, "phần suy nghĩ cũng phải dùng tiếng Việt") || strings.Contains(vi, "中文") {
+		t.Fatalf("Vietnamese prompt should require Vietnamese thinking without Chinese instructions: %q", vi)
+	}
+	zh := coCreateSystemPrompt(utils.LanguageZH)
+	if !strings.Contains(zh, "思考内容也必须使用中文") || strings.Contains(zh, "tiếng Việt") {
+		t.Fatalf("Chinese prompt should require Chinese thinking without Vietnamese instructions: %q", zh)
+	}
+
+	stageVI := stageCoCreateSystemPrompt(utils.LanguageVI)
+	if !strings.Contains(stageVI, "brief hướng đi") || strings.Contains(stageVI, "后续方向 brief") {
+		t.Fatalf("Vietnamese stage prompt is not localized: %q", stageVI)
+	}
+	stageZH := stageCoCreateSystemPrompt(utils.LanguageZH)
+	if !strings.Contains(stageZH, "后续方向 brief") || strings.Contains(stageZH, "brief hướng đi") {
+		t.Fatalf("Chinese stage prompt is not localized: %q", stageZH)
+	}
+}
+
+func TestStagePromptAssemblyUsesLocale(t *testing.T) {
+	st := store.NewStore(t.TempDir())
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Book.Save(domain.BookMetadata{Title: "Câu chuyện", Synopsis: "Tóm tắt câu chuyện"}); err != nil {
+		t.Fatal(err)
+	}
+	vi := stageSystemPrompt(st, utils.LanguageVI)
+	if !strings.Contains(vi, "## Trạng thái câu chuyện hiện tại") || strings.Contains(vi, "## 当前故事状态") {
+		t.Fatalf("Vietnamese stage assembly is not localized: %q", vi)
+	}
+	zh := stageSystemPrompt(st, utils.LanguageZH)
+	if !strings.Contains(zh, "## 当前故事状态") || strings.Contains(zh, "## Trạng thái câu chuyện hiện tại") {
+		t.Fatalf("Chinese stage assembly is not localized: %q", zh)
+	}
+	if strings.Contains(buildStoryStateSummary(st, utils.LanguageVI), "（") {
+		t.Fatalf("Vietnamese summary should not use Chinese role punctuation")
+	}
+}
+
+func TestStagePlanPrefixUsesLocale(t *testing.T) {
+	vi := stagePlanPrefix(utils.LanguageVI)
+	if !strings.Contains(vi, "[Lập kế hoạch giai đoạn]") || strings.Contains(vi, "阶段规划") {
+		t.Fatalf("Vietnamese stage prefix is not localized: %q", vi)
+	}
+	zh := stagePlanPrefix(utils.LanguageZH)
+	if !strings.Contains(zh, "[阶段规划]") || strings.Contains(zh, "Lập kế hoạch giai đoạn") {
+		t.Fatalf("Chinese stage prefix is not localized: %q", zh)
+	}
+}
+
 func TestBuildStoryStateSummary_NilStore(t *testing.T) {
 	if got := buildStoryStateSummary(nil); got != "" {
 		t.Errorf("nil store 应返回空串，得 %q", got)
@@ -216,7 +269,7 @@ func TestBuildStoryStateSummary_Populated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := buildStoryStateSummary(st)
+	got := buildStoryStateSummary(st, utils.LanguageZH)
 	for _, want := range []string{"影之诗", "已完成 3 章", "下一章为第 4 章", "主角登临绝巅", "师门血仇未报", "预计 4-6 卷"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("摘要应含 %q，实际:\n%s", want, got)
@@ -249,7 +302,7 @@ func TestBuildStoryStateSummaryUsesDynamicPlanningWording(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := buildStoryStateSummary(st)
+	got := buildStoryStateSummary(st, utils.LanguageZH)
 	if !strings.Contains(got, "当前已细化 2 章（后续按弧动态规划）") {
 		t.Fatalf("动态规划摘要口径错误:\n%s", got)
 	}

@@ -3,8 +3,8 @@ package userrules
 import (
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/rules"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/rules"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 )
 
 // nil 模型 + 空规则目录：归一化全降级，但快照仍可产出（system_defaults 兜底）并落盘。
@@ -44,7 +44,7 @@ func TestService_Build_DegradesButPersists(t *testing.T) {
 	}
 }
 
-func TestService_GetOrBuildInitializesMissingSnapshot(t *testing.T) {
+func TestService_GetOrBuild_LazyForOldBook(t *testing.T) {
 	svc, st := newDegradedService(t)
 
 	if cur, _ := st.UserRules.Load(); cur != nil {

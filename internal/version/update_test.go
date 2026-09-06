@@ -14,13 +14,13 @@ import (
 
 func TestReleaseURL(t *testing.T) {
 	cases := map[string]string{
-		"":       "https://api.github.com/repos/voocel/ainovel-cli/releases/latest",
-		"latest": "https://api.github.com/repos/voocel/ainovel-cli/releases/latest",
-		"1.2.3":  "https://api.github.com/repos/voocel/ainovel-cli/releases/tags/v1.2.3",
-		"v1.2.3": "https://api.github.com/repos/voocel/ainovel-cli/releases/tags/v1.2.3",
+		"":       "https://api.github.com/repos/JustinNguyen9979/ainovel-cli/releases/latest",
+		"latest": "https://api.github.com/repos/JustinNguyen9979/ainovel-cli/releases/latest",
+		"1.2.3":  "https://api.github.com/repos/JustinNguyen9979/ainovel-cli/releases/tags/v1.2.3",
+		"v1.2.3": "https://api.github.com/repos/JustinNguyen9979/ainovel-cli/releases/tags/v1.2.3",
 	}
 	for target, want := range cases {
-		if got := releaseURL("voocel/ainovel-cli", target); got != want {
+		if got := releaseURL("JustinNguyen9979/ainovel-cli", target); got != want {
 			t.Fatalf("releaseURL(%q) = %q, want %q", target, got, want)
 		}
 	}

@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 type modelRuntime interface {
@@ -36,21 +37,17 @@ type modelRoleOption struct {
 
 var modelRoleOptions = []modelRoleOption{
 	{Key: "default", Label: "Mặc định"},
-	{Key: "architect", Label: "Architect (Kiến trúc sư)"},
-	{Key: "writer", Label: "Writer (Người viết)"},
-	{Key: "editor", Label: "Editor (Biên tập viên)"},
+
+	{Key: "architect", Label: "Architect"},
+	{Key: "writer", Label: "Writer"},
+	{Key: "editor", Label: "Editor"},
+	{Key: "cocreate", Label: "CoCreate"},
 }
 
 type thinkingOption struct{ Key, Label string }
 
 var allThinkingOptions = []thinkingOption{
-	{"", "Mặc định (kế thừa)"},
-	{"off", "Tắt"},
-	{"low", "Thấp"},
-	{"medium", "Vừa"},
-	{"high", "Cao"},
-	{"xhigh", "Rất cao"},
-	{"max", "Tối đa"},
+	{"", "Mặc định (kế thừa)"}, {"off", "Tắt"}, {"low", "Thấp"}, {"medium", "Trung bình"}, {"high", "Cao"}, {"xhigh", "Rất cao"}, {"max", "Tối đa"},
 }
 
 func thinkingOptionsFor(rt modelRuntime, role string) []thinkingOption {
@@ -81,28 +78,32 @@ func thinkingIndexOf(options []thinkingOption, level string) int {
 			return i
 		}
 	}
-	return 0
+	return 0 // 未知值 → 继承
 }
 
 type modelSwitchState struct {
-	focus              modelSwitchFocus
-	roleIdx            int
-	providerIdx        int
-	modelIdx           int
-	thinkingIdx        int
-	providers          []string
-	models             []host.ConfiguredModel
-	thinking           []thinkingOption
+	language    utils.Language
+	focus       modelSwitchFocus
+	roleIdx     int
+	providerIdx int
+	modelIdx    int
+	thinkingIdx int
+	providers   []string
+	models      []host.ConfiguredModel
+	thinking    []thinkingOption
+	// initialThinkingKey 记录面板打开时该角色强度字段的初始选中值。仅当用户实际移动了
+	// 该字段才回写——存储的强度意图可能高于当前模型能力、面板无法呈现，不能因“没动”而误抹。
 	initialThinkingKey string
 	message            string
 }
 
-func newModelSwitchState(rt modelRuntime, roleHint string) *modelSwitchState {
+func newModelSwitchState(rt modelRuntime, roleHint string, languages ...utils.Language) *modelSwitchState {
 	state := &modelSwitchState{
+		language:  resolveLanguage(languages),
 		providers: rt.ConfiguredProviders(),
 	}
 	if len(state.providers) == 0 {
-		state.message = "Hiện không có Provider nào khả dụng"
+		state.message = ui(state.language, "没有可用 Provider", "Chưa có provider khả dụng")
 	}
 
 	roleHint = normalizeRoleKey(roleHint)
@@ -120,7 +121,7 @@ func normalizeRoleKey(role string) string {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "", "default":
 		return "default"
-	case "architect", "writer", "editor":
+	case "architect", "writer", "editor", "cocreate":
 		return strings.ToLower(strings.TrimSpace(role))
 	default:
 		return ""
@@ -132,6 +133,9 @@ func (s *modelSwitchState) role() string {
 }
 
 func (s *modelSwitchState) roleLabel() string {
+	if modelRoleOptions[s.roleIdx].Key == "default" {
+		return ui(s.language, "默认", "Mặc định")
+	}
 	return modelRoleOptions[s.roleIdx].Label
 }
 
@@ -169,7 +173,20 @@ func (s *modelSwitchState) thinkingKey() string {
 
 func (s *modelSwitchState) thinkingLabel() string {
 	if s.thinkingIdx < 0 || s.thinkingIdx >= len(s.thinking) {
-		return allThinkingOptions[0].Label
+		return ui(s.language, "默认（继承）", "Mặc định (kế thừa)")
+	}
+	key := s.thinking[s.thinkingIdx].Key
+	labels := map[string][2]string{
+		"":       {"默认（继承）", "Mặc định (kế thừa)"},
+		"off":    {"关闭", "Tắt"},
+		"low":    {"低", "Thấp"},
+		"medium": {"中", "Trung bình"},
+		"high":   {"高", "Cao"},
+		"xhigh":  {"很高", "Rất cao"},
+		"max":    {"最高", "Tối đa"},
+	}
+	if pair, ok := labels[key]; ok {
+		return ui(s.language, pair[0], pair[1])
 	}
 	return s.thinking[s.thinkingIdx].Label
 }
@@ -246,15 +263,17 @@ func (s *modelSwitchState) syncThinking(rt modelRuntime) {
 
 func (s *modelSwitchState) apply(rt modelRuntime) error {
 	if len(s.providers) == 0 {
-		return fmt.Errorf("hiện không có provider nào khả dụng")
+		return fmt.Errorf("%s", ui(s.language, "没有可用 Provider", "Chưa có provider khả dụng"))
 	}
 	if len(s.models) == 0 {
-		return fmt.Errorf("provider %q chưa có model nào", s.provider())
+		return fmt.Errorf(ui(s.language, "Provider %q 尚未配置模型", "Provider %q chưa có model được cấu hình"), s.provider())
 	}
 	wantThinking := s.thinkingKey()
 	if err := rt.SwitchModel(s.role(), s.provider(), s.model()); err != nil {
 		return err
 	}
+	// 推理强度与模型正交：仅当用户实际移动了强度字段才回写，避免把面板无法呈现的
+	// 高意图（当前模型能力不足）误抹成初始默认值。
 	if wantThinking != s.initialThinkingKey {
 		if err := rt.SetRoleThinking(s.role(), wantThinking); err != nil {
 			return err
@@ -303,19 +322,20 @@ func renderModelSwitchBar(width int, state *modelSwitchState) string {
 		return ""
 	}
 
+	lang := state.language
 	title := lipgloss.NewStyle().
 		Foreground(colorMuted).
 		Bold(true).
-		Render("/model Phân Vai & Model")
+		Render(ui(lang, "/model 切换模型", "/model đổi model"))
 
-	row1 := renderModelField("Vai trò", state.roleLabel(), state.focus == modelFocusRole)
-	row2 := renderModelField("Provider", state.provider(), state.focus == modelFocusProvider)
-	row3 := renderModelField("Model", state.modelLabel(), state.focus == modelFocusModel)
-	row4 := renderModelField("Suy luận", state.thinkingLabel(), state.focus == modelFocusThinking)
+	row1 := renderModelField(ui(lang, "角色", "Vai trò"), state.roleLabel(), state.focus == modelFocusRole, lang)
+	row2 := renderModelField("Provider", state.provider(), state.focus == modelFocusProvider, lang)
+	row3 := renderModelField(ui(lang, "模型", "Model"), state.modelLabel(), state.focus == modelFocusModel, lang)
+	row4 := renderModelField(ui(lang, "推理强度", "Mức suy luận"), state.thinkingLabel(), state.focus == modelFocusThinking, lang)
 	hint := lipgloss.NewStyle().
 		Foreground(colorDim).
 		Italic(true).
-		Render("Tab Chuyển ô   ←→ Chọn giá trị   Enter Áp dụng   Esc Hủy")
+		Render(ui(lang, "Tab 切换字段   ←→ 切换选项   Enter 应用   Esc 取消", "Tab đổi trường   ←→ đổi lựa chọn   Enter áp dụng   Esc hủy"))
 	lines := []string{
 		row1,
 		row2,
@@ -364,9 +384,9 @@ func renderModelSwitchBar(width int, state *modelSwitchState) string {
 	return strings.Join(append(append([]string{topBorder}, body...), bottomBorder), "\n")
 }
 
-func renderModelField(label, value string, focused bool) string {
+func renderModelField(label, value string, focused bool, languages ...utils.Language) string {
 	if strings.TrimSpace(value) == "" {
-		value = "Chưa đặt"
+		value = ui(resolveLanguage(languages), "未设置", "Chưa đặt")
 	}
 	labelText := lipgloss.NewStyle().
 		Foreground(colorMuted).

@@ -10,11 +10,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/host/sim"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host/sim"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 )
 
 type simulationState struct {
+	language   utils.Language
 	reqID      int
 	title      string
 	source     string
@@ -49,11 +51,13 @@ func (m simEventMsg) terminal() bool {
 	return m.ev.Stage == sim.StageDone || m.ev.Stage == sim.StageError
 }
 
-func newSimulationState(reqID int, title, source string, width, height int, cancel context.CancelFunc) *simulationState {
+func newSimulationState(reqID int, title, source string, width, height int, cancel context.CancelFunc, languages ...utils.Language) *simulationState {
 	boxW, boxH := reportModalSize(width, height)
+	lang := resolveLanguage(languages)
 	contentW := paddedModalContentWidth(boxW)
 	vp := viewport.New(contentW, boxH-4)
 	s := &simulationState{
+		language:  lang,
 		reqID:     reqID,
 		title:     title,
 		source:    source,
@@ -84,7 +88,23 @@ func (s *simulationState) appendEvent(ev sim.Event, contentW int) {
 	s.refresh(contentW)
 }
 
+func localizedSimulationStage(lang utils.Language, stage sim.Stage) string {
+	labels := map[sim.Stage][2]string{
+		sim.StageScan:    {"扫描中", "Đang quét"},
+		sim.StageAnalyze: {"分析中", "Đang phân tích"},
+		sim.StageMerge:   {"合并中", "Đang hợp nhất"},
+		sim.StageImport:  {"导入中", "Đang nhập"},
+		sim.StageDone:    {"完成", "Hoàn tất"},
+		sim.StageError:   {"错误", "Lỗi"},
+	}
+	if pair, ok := labels[stage]; ok {
+		return ui(lang, pair[0], pair[1])
+	}
+	return string(stage)
+}
+
 func (s *simulationState) refresh(contentW int) {
+	lang := s.language
 	titleStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
 	mutedStyle := lipgloss.NewStyle().Foreground(colorMuted)
@@ -96,35 +116,35 @@ func (s *simulationState) refresh(contentW int) {
 	b.WriteString(titleStyle.Render(s.title))
 	b.WriteString("\n\n")
 	if s.source != "" {
-		b.WriteString(dimStyle.Render("Nguồn: "))
+		b.WriteString(dimStyle.Render(ui(lang, "来源 ", "Nguồn ")))
 		b.WriteString(s.source)
 		b.WriteString("\n")
 	}
-	b.WriteString(dimStyle.Render("Bắt đầu: "))
+	b.WriteString(dimStyle.Render(ui(lang, "开始 ", "Bắt đầu ")))
 	b.WriteString(formatReportTime(s.startedAt))
 	if !s.finishedAt.IsZero() {
-		b.WriteString(dimStyle.Render("  Hoàn thành: "))
+		b.WriteString(dimStyle.Render(ui(lang, "  完成 ", "  Hoàn tất ")))
 		b.WriteString(formatReportTime(s.finishedAt))
 	}
 	b.WriteString("\n\n")
 
-	b.WriteString(mutedStyle.Render("Giai đoạn: "))
-	b.WriteString(stageStyle.Render(string(s.stage)))
+	b.WriteString(mutedStyle.Render(ui(lang, "阶段 ", "Giai đoạn ")))
+	b.WriteString(stageStyle.Render(localizedSimulationStage(lang, s.stage)))
 	if s.total > 0 {
-		b.WriteString(mutedStyle.Render("  Tiến độ: "))
+		b.WriteString(mutedStyle.Render(ui(lang, "  进度 ", "  Tiến độ ")))
 		b.WriteString(fmt.Sprintf("%d/%d", s.current, s.total))
 	}
 	b.WriteString("\n\n")
 
-	b.WriteString(titleStyle.Render("Nhật ký tiến trình"))
+	b.WriteString(titleStyle.Render(ui(lang, "流程日志", "Nhật ký quy trình")))
 	b.WriteString(" ")
-	b.WriteString(dimStyle.Render(fmt.Sprintf("(%d dòng)", len(s.history))))
+	b.WriteString(dimStyle.Render(fmt.Sprintf(ui(lang, "(%d 条)", "(%d dòng)"), len(s.history))))
 	b.WriteString("\n")
 	for _, ln := range s.history {
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render(ln.at.Format("15:04:05")))
 		b.WriteString(" ")
-		b.WriteString(stageStyle.Render(string(ln.stage)))
+		b.WriteString(stageStyle.Render(localizedSimulationStage(lang, ln.stage)))
 		if ln.total > 0 && ln.current > 0 {
 			b.WriteString(mutedStyle.Render(fmt.Sprintf(" %d/%d", ln.current, ln.total)))
 		}
@@ -139,15 +159,15 @@ func (s *simulationState) refresh(contentW int) {
 	b.WriteString("\n\n")
 	switch {
 	case !s.done:
-		b.WriteString(dimStyle.Render("Esc Hủy"))
+		b.WriteString(dimStyle.Render(ui(lang, "Esc 取消", "Esc hủy")))
 	case s.err != nil:
-		b.WriteString(errStyle.Render("Xử lý hồ sơ mô phỏng thất bại"))
+		b.WriteString(errStyle.Render(ui(lang, "仿写画像处理失败", "Xử lý hồ sơ mô phỏng thất bại")))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("Esc Đóng bảng"))
+		b.WriteString(dimStyle.Render(ui(lang, "Esc 关闭面板", "Esc đóng bảng")))
 	default:
-		b.WriteString(okStyle.Render("Hồ sơ mô phỏng văn phong đã sẵn sàng, các Agent sẽ đọc từ novel_context"))
+		b.WriteString(okStyle.Render(ui(lang, "仿写画像已就绪，后续 Agent 会从 novel_context 读取", "Hồ sơ mô phỏng đã sẵn sàng, các Agent tiếp theo sẽ đọc từ novel_context")))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("Esc Đóng bảng"))
+		b.WriteString(dimStyle.Render(ui(lang, "Esc 关闭面板", "Esc đóng bảng")))
 	}
 
 	s.viewport.SetContent(b.String())
@@ -169,8 +189,9 @@ func renderSimulationModal(width, height int, s *simulationState) string {
 	if s.viewport.Height != boxH-4 {
 		s.viewport.Height = boxH - 4
 	}
-	hint := "  ↑↓ Cuộn · Esc Hủy/Đóng"
-	modal := renderPaddedModalFrame(boxW, boxH, "Hồ Sơ Mô Phỏng Văn Phong", hint, strings.Split(s.viewport.View(), "\n"))
+	lang := s.language
+	hint := ui(lang, "  ↑↓ 滚动 · Esc 取消/关闭", "  ↑↓ cuộn · Esc hủy/đóng")
+	modal := renderPaddedModalFrame(boxW, boxH, ui(lang, "仿写画像", "Hồ sơ mô phỏng"), hint, strings.Split(s.viewport.View(), "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
 
@@ -198,9 +219,9 @@ func (m Model) handleSimulationKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func startSimulate(rt *host.Host, reqID int, args []string, width, height int) (*simulationState, tea.Cmd, error) {
+func startSimulate(rt *host.Host, reqID int, args []string, width, height int, languages ...utils.Language) (*simulationState, tea.Cmd, error) {
 	if len(args) > 0 {
-		return nil, nil, fmt.Errorf("cách dùng: /simulate")
+		return nil, nil, fmt.Errorf("用法：/simulate")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ch, err := rt.Simulate(ctx)
@@ -208,13 +229,14 @@ func startSimulate(rt *host.Host, reqID int, args []string, width, height int) (
 		cancel()
 		return nil, nil, err
 	}
-	state := newSimulationState(reqID, "Tạo Hồ Sơ Mô Phỏng", "./simulate", width, height, cancel)
+	lang := resolveLanguage(languages)
+	state := newSimulationState(reqID, ui(lang, "生成仿写画像", "Tạo hồ sơ mô phỏng"), "./simulate", width, height, cancel, lang)
 	return state, listenSimulationEvent(reqID, ch), nil
 }
 
-func startImportSimulation(rt *host.Host, reqID int, args []string, width, height int) (*simulationState, tea.Cmd, error) {
+func startImportSimulation(rt *host.Host, reqID int, args []string, width, height int, languages ...utils.Language) (*simulationState, tea.Cmd, error) {
 	if len(args) != 1 {
-		return nil, nil, fmt.Errorf("cách dùng: /importsim <profile.json>")
+		return nil, nil, fmt.Errorf("用法：/importsim <profile.json>")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ch, err := rt.ImportSimulationProfile(ctx, args[0])
@@ -222,7 +244,8 @@ func startImportSimulation(rt *host.Host, reqID int, args []string, width, heigh
 		cancel()
 		return nil, nil, err
 	}
-	state := newSimulationState(reqID, "Nhập Hồ Sơ Mô Phỏng", args[0], width, height, cancel)
+	lang := resolveLanguage(languages)
+	state := newSimulationState(reqID, ui(lang, "导入仿写画像", "Nhập hồ sơ mô phỏng"), args[0], width, height, cancel, lang)
 	return state, listenSimulationEvent(reqID, ch), nil
 }
 

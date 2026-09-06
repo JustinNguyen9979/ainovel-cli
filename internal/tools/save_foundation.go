@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/errs"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore/schema"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/errs"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // SaveFoundationTool 保存基础设定（premise/outline/characters），Architect 专用。

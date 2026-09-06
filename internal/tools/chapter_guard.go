@@ -3,9 +3,9 @@ package tools
 import (
 	"fmt"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/errs"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/errs"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 )
 
 // EnsureChapterExpanded verifies that chapter work is in the writing phase and,
