@@ -18,7 +18,7 @@
 | 写作标准 | `assets/prompts/writer.md` §写作标准 | 与执行协议混在同一内嵌文件 | ❌ |
 | 风格预设 | `assets/styles/*.md`(4 个) | cfg.Style 单点选择,追加到 writer prompt | ❌ 且不能新增 |
 | 机械规则 | `internal/rules` | 疲劳词/禁用语/字数,commit 强制检查 | ✅ 已有三层覆盖(注意:其"项目级"绑定 **cwd**,见 3.4) |
-| 运行时偏好 | Arbiter `rules` 动作 | 自然语言 → 结构化,跨重启生效 | ✅ |
+| 运行时偏好 | `save_user_rules` | 自然语言 → 结构化,跨重启生效 | ✅ |
 
 另有两件关键基建:**stylestat**(全书级句式 tic 统计,喂回 writer 作"口头禅镜像",纯代码零幻觉)和 **eval 的 `OverridePrompt`**(prompt A/B 基建已存在)。
 
@@ -80,7 +80,7 @@ func BuildWriterPrompt(protocolTemplate, voice, simulationGuidance, style string
 本书级   <outputDir>/style/     >   全局   ~/.ainovel/style/   >   内置默认(embed 兜底)
 ```
 
-- 绑定 outputDir 使 Voice **随书走**:换目录恢复同一本书加载同一份文风;Docker/headless/TUI 路径解析一致;多书共享 cwd 时互不串扰
+- 绑定 outputDir 使 Voice **随书走**:换目录恢复同一本书加载同一份文风;headless/TUI 路径解析一致;多书共享 cwd 时互不串扰
 - `assets.Load` 签名显式接收解析根(outputDir),**内部不读 cwd**
 - 注意与 rules 层的差异:rules 的 `./.ainovel/rules` 绑定 cwd(internal/rules/loader.go 既有约定,本设计不动它);用户文档明确两者语义不同——rules 是"项目级",voice 是"本书级"
 

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
 )
 
 func TestAdvanceCommandsAreRegistered(t *testing.T) {
@@ -33,7 +33,7 @@ func TestReviewWaitingPlaceholder(t *testing.T) {
 		},
 	}
 	m.syncRuntimePlaceholder()
-	if got := m.textarea.Placeholder; !strings.Contains(got, "/next") || !strings.Contains(got, "chỉnh sửa") {
+	if got := m.textarea.Placeholder; !strings.Contains(got, "/next") || !strings.Contains(got, "góp ý sửa") {
 		t.Fatalf("review placeholder should expose both choices, got %q", got)
 	}
 }

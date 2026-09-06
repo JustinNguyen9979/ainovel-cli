@@ -9,6 +9,37 @@ import (
 	"testing"
 )
 
+func TestModelSetCocreateFallsBackToDefault(t *testing.T) {
+	cfg := Config{
+		Provider: "openrouter", ModelName: "default-model",
+		Providers: map[string]ProviderConfig{"openrouter": {APIKey: "sk-test"}},
+	}
+	models, err := NewModelSet(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, model, explicit := models.CurrentSelection("cocreate")
+	if provider != "openrouter" || model != "default-model" || explicit {
+		t.Fatalf("cocreate fallback selection = %s/%s explicit=%v", provider, model, explicit)
+	}
+}
+
+func TestModelSetCocreateUsesConfiguredRole(t *testing.T) {
+	cfg := Config{
+		Provider: "openrouter", ModelName: "default-model",
+		Providers: map[string]ProviderConfig{"openrouter": {APIKey: "sk-test"}},
+		Roles:     map[string]RoleConfig{"cocreate": {Provider: "openrouter", Model: "cocreate-model"}},
+	}
+	models, err := NewModelSet(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, model, explicit := models.CurrentSelection("cocreate")
+	if provider != "openrouter" || model != "cocreate-model" || !explicit {
+		t.Fatalf("cocreate configured selection = %s/%s explicit=%v", provider, model, explicit)
+	}
+}
+
 func TestModelConfigAcceptsLegacyAndObjectEntries(t *testing.T) {
 	var cfg Config
 	input := `{

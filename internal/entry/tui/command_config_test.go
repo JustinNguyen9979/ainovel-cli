@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/bootstrap"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
-	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 func hubFieldIDs(fields []hubField) []string {
@@ -136,7 +137,7 @@ func TestModelRenameProducesExplicitDraftAndReferenceNotice(t *testing.T) {
 	if len(draft.Renames) != 1 || draft.Renames[0] != (host.ModelRename{From: "old", To: "renamed"}) {
 		t.Fatalf("模型改名必须保留显式身份关系，renames=%#v", draft.Renames)
 	}
-	if !strings.Contains(st.message, "đồng bộ") || !strings.Contains(st.message, "default") {
+	if !strings.Contains(st.message, "cập nhật tham chiếu") || !strings.Contains(st.message, "default") {
 		t.Fatalf("引用模型改名应明确提示保存行为，message=%q", st.message)
 	}
 }
@@ -149,7 +150,7 @@ func TestModelListRendersEditableColumnsAndReferences(t *testing.T) {
 		},
 	}
 	plain := ansi.Strip(renderModelConfigModal(120, st))
-	for _, want := range []string{"Tên/ID Model", "Cửa sổ ngữ cảnh", "Vai trò gán", "deepseek-chat", "128K", "default", "+ Thêm Model mới"} {
+	for _, want := range []string{"ID model", "Cửa sổ ngữ cảnh", "Tham chiếu", "deepseek-chat", "128K", "default", "+ Thêm model"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("单页模型表缺少 %q:\n%s", want, plain)
 		}
@@ -207,13 +208,13 @@ func TestParseContextWindowInput(t *testing.T) {
 		"1.5m": 1500000, "200000": 200000,
 	}
 	for input, want := range cases {
-		got, err := parseContextWindowInput(input)
+		got, err := parseContextWindowInput(input, utils.LanguageVI)
 		if err != nil || got != want {
 			t.Errorf("parseContextWindowInput(%q) = %d, %v; want %d", input, got, err, want)
 		}
 	}
 	for _, input := range []string{"-1", "abc", "0.5"} {
-		if _, err := parseContextWindowInput(input); err == nil {
+		if _, err := parseContextWindowInput(input, utils.LanguageVI); err == nil {
 			t.Errorf("parseContextWindowInput(%q) should fail", input)
 		}
 	}
@@ -418,6 +419,30 @@ func TestConnectionActionStartsAsyncTestWithoutLeavingHub(t *testing.T) {
 	}
 }
 
+func TestConnectionTestSuccessRendersPositiveGreenStatus(t *testing.T) {
+	state := &modelConfigState{step: configStepHub, language: utils.LanguageVI, provider: "proxy", message: "Kiểm tra kết nối thành công: model", messageSuccess: true}
+	plain := ansi.Strip(renderModelConfigModal(100, state))
+	if !strings.Contains(plain, "✓ Kiểm tra kết nối thành công: model") {
+		t.Fatalf("success status missing: %q", plain)
+	}
+	styled := renderModelConfigModal(100, state)
+	if !strings.Contains(styled, lipgloss.NewStyle().Foreground(colorSuccess).Render("✓ Kiểm tra kết nối thành công: model")) {
+		t.Fatalf("success status should use success color: %q", styled)
+	}
+}
+
+func TestConnectionTestFailureRendersNegativeRedStatus(t *testing.T) {
+	state := &modelConfigState{step: configStepHub, language: utils.LanguageVI, provider: "proxy", message: "connection refused", messageSuccess: false}
+	plain := ansi.Strip(renderModelConfigModal(100, state))
+	if !strings.Contains(plain, "✕ connection refused") {
+		t.Fatalf("failure status missing: %q", plain)
+	}
+	styled := renderModelConfigModal(100, state)
+	if !strings.Contains(styled, lipgloss.NewStyle().Foreground(colorError).Render("✕ connection refused")) {
+		t.Fatalf("failure status should use error color: %q", styled)
+	}
+}
+
 func TestConnectionTestCanBeCancelled(t *testing.T) {
 	cancelled := false
 	state := &modelConfigState{step: configStepHub, provider: "proxy", testing: true,
@@ -430,7 +455,7 @@ func TestConnectionTestCanBeCancelled(t *testing.T) {
 
 	updated, _, handled := m.handleRuntimeMsg(modelConfigConnectionMsg{err: context.Canceled})
 	m = updated.(Model)
-	if !handled || m.modelConfig.testing || m.modelConfig.message != "Kiểm tra kết nối đã bị hủy" {
+	if !handled || m.modelConfig.testing || m.modelConfig.message != "Đã hủy kiểm tra kết nối" {
 		t.Fatalf("取消结果未正确收敛: handled=%v testing=%v message=%q", handled, m.modelConfig.testing, m.modelConfig.message)
 	}
 }

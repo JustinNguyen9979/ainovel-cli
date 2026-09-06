@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/llmcontract"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/llmcontract"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 )
 
 func TestResolveOutlineFeedbackClearsReviewedFeedback(t *testing.T) {

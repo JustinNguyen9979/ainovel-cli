@@ -1,14 +1,14 @@
 #!/bin/sh
 # ainovel-cli 一键安装脚本
 #
-#   curl -fsSL https://raw.githubusercontent.com/voocel/ainovel-cli/main/scripts/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/voocel/ainovel-cli/v1.2.3/scripts/install.sh | sh -s -- v1.2.3
+#   curl -fsSL https://raw.githubusercontent.com/JustinNguyen9979/ainovel-cli/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/JustinNguyen9979/ainovel-cli/v1.2.3/scripts/install.sh | sh -s -- v1.2.3
 #
 # 自定义安装目录： AINOVEL_INSTALL_DIR=~/.local/bin curl -fsSL ... | sh
 # 指定版本：AINOVEL_VERSION=v1.2.3 curl -fsSL ... | sh
 set -e
 
-REPO="voocel/ainovel-cli"
+REPO="JustinNguyen9979/ainovel-cli"
 BIN="ainovel-cli"
 DEST="${AINOVEL_INSTALL_DIR:-/usr/local/bin}"
 VERSION="${AINOVEL_VERSION:-${1:-latest}}"
@@ -98,6 +98,11 @@ ACTUAL=$(sha256_file "$TMP/$ASSET")
 echo "SHA256 校验通过"
 
 CONTENTS=$(tar -tzf "$TMP/$ASSET") || { echo "无法读取安装包，拒绝安装"; exit 1; }
+TYPES=$(tar -tvzf "$TMP/$ASSET") || { echo "无法检查安装包条目，拒绝安装"; exit 1; }
+printf '%s\n' "$TYPES" | awk '$1 !~ /^-/ { exit 1 }' || {
+	echo "安装包包含非普通文件条目，拒绝安装"
+	exit 1
+}
 BIN_COUNT=$(printf '%s\n' "$CONTENTS" | awk -v bin="$BIN" '$0 == bin { count++ } END { print count + 0 }')
 [ "$BIN_COUNT" -eq 1 ] || { echo "安装包中未唯一找到 $BIN，拒绝安装"; exit 1; }
 

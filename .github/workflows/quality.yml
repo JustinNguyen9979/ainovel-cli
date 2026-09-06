@@ -1,0 +1,241 @@
+name: Quality Gates
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    name: Source quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOWORK: off
+      COVERAGE_MINIMUM: 80
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check formatting
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+      - name: Verify modules are tidy
+        run: |
+          go mod verify
+          cp go.mod /tmp/go.mod.before
+          cp go.sum /tmp/go.sum.before
+          go mod tidy
+          cmp /tmp/go.mod.before go.mod
+          cmp /tmp/go.sum.before go.sum
+      - name: Vet
+        run: go vet ./...
+      - name: Test with coverage
+        run: go test -buildvcs=false -covermode=atomic -coverprofile=coverage.out -count=1 ./...
+      - name: Coverage gate
+        run: scripts/ci/check-coverage.sh coverage.out
+      - name: Race test stateful packages
+        run: go test -race -buildvcs=false -count=1 ./internal/host ./internal/store ./internal/tools
+      - name: Build CLI
+        run: go build -trimpath -o /tmp/ainovel-cli ./cmd/ainovel-cli
+      - name: Upload coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage.out
+          if-no-files-found: error
+
+  npm:
+    name: npm package quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Test launcher
+        run: npm test
+      - name: Verify package
+        run: scripts/ci/verify-package.sh
+      - name: Pack package
+        run: npm pack --pack-destination dist
+      - name: Upload npm tarball
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: npm-package-${{ github.sha }}
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  security:
+    name: Security and license quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify Go modules
+        run: go mod verify
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - name: Run govulncheck
+        run: govulncheck ./...
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Audit npm dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check Apache license
+        run: |
+          grep -q 'Apache License' LICENSE
+          test "$(node -p "require('./package.json').license")" = Apache-2.0
+          test "$(node -p "require('./package-lock.json').packages[''].license")" = Apache-2.0
+
+  benchmark:
+    name: Benchmark regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: source
+    env:
+      BENCHMARK_MAX_REGRESSION: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run benchmarks
+        run: go test ./internal/utils -run '^$' -bench '^Benchmark(JSONFieldExtractor|StreamFilter)$' -benchmem -count=5 | tee benchmarks/current.txt
+      - name: Compare baseline
+        run: scripts/ci/check-benchmark.sh benchmarks/baseline.json benchmarks/current.txt
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: benchmark-${{ github.sha }}
+          path: benchmarks/current.txt
+          if-no-files-found: error
+
+  native:
+    name: Native ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-24.04
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+          - name: macos-intel
+            os: macos-15-intel
+          - name: macos-arm64
+            os: macos-14
+          - name: windows-x64
+            os: windows-2025
+          - name: windows-arm64
+            os: windows-11-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      GOWORK: off
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test -buildvcs=false -count=1 ./...
+      - name: Build and run version check
+        shell: bash
+        run: |
+          set -euo pipefail
+          ext=''
+          if [ "${{ runner.os }}" = Windows ]; then ext='.exe'; fi
+          go build -trimpath -o "/tmp/ainovel-cli${ext}" ./cmd/ainovel-cli
+          "/tmp/ainovel-cli${ext}" --version
+
+  cross-build:
+    name: Cross-build six targets
+    needs: [source, npm, security, benchmark]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOWORK: off
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cross-build all six targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist && mkdir dist
+          for target in 'linux amd64 Linux x86_64 tar.gz' 'linux arm64 Linux arm64 tar.gz' 'darwin amd64 Darwin x86_64 tar.gz' 'darwin arm64 Darwin arm64 tar.gz' 'windows amd64 Windows x86_64 zip' 'windows arm64 Windows arm64 zip'; do
+            set -- $target
+            goos=$1; goarch=$2; release_os=$3; release_arch=$4; archive_ext=$5
+            ext=''
+            if [ "$goos" = windows ]; then ext='.exe'; fi
+            binary="ainovel-cli_${release_os}_${release_arch}${ext}"
+            GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags="-s -w -X main.version=ci -X main.commit=${GITHUB_SHA}" -o "dist/$binary" ./cmd/ainovel-cli
+            if [ "$archive_ext" = tar.gz ]; then tar -czf "dist/ainovel-cli_ci_${release_os}_${release_arch}.tar.gz" -C dist "$binary"; else (cd dist && zip -q "ainovel-cli_ci_${release_os}_${release_arch}.zip" "$binary"); fi
+            rm "dist/$binary"
+          done
+          (cd dist && shasum -a 256 ainovel-cli_ci_*.tar.gz ainovel-cli_ci_*.zip > ainovel-cli_checksums.txt)
+      - name: Upload native artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-${{ github.sha }}
+          path: dist
+          if-no-files-found: error

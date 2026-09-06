@@ -7,18 +7,19 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/rules"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/rules"
-	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
-// exampleConfig là mẫu cấu hình có chú thích ghi vào ~/.ainovel/config.example.jsonc.
+// exampleConfig 是引导后写入 ~/.ainovel/config.example.jsonc 的带注释模板。
+// 嵌入文件必须与仓库根目录 config.example.jsonc 保持一致，测试会防止漂移。
 //
 //go:embed config.example.jsonc
 var exampleConfig string
 
-// NeedsSetup kiểm tra xem có cần chạy trình hướng dẫn khởi tạo lần đầu hay không.
+// NeedsSetup 检查是否需要首次引导（全局与项目级配置都不存在时触发）。
 func NeedsSetup() bool {
 	if p := DefaultConfigPath(); p != "" {
 		if _, err := os.Stat(p); err == nil {
@@ -34,12 +35,12 @@ func NeedsSetup() bool {
 type setupProvider struct {
 	name           string
 	label          string
-	baseURL        string // base_url điền sẵn
-	needType       bool   // Proxy tùy chỉnh cần hỏi thêm type và base_url
-	apiKeyOptional bool   // true nếu cho phép để trống API Key
+	baseURL        string // 预填的 base_url
+	needType       bool   // 自定义代理需要额外问 type 和 base_url
+	apiKeyOptional bool   // true 表示 API Key 允许留空
 }
 
-// ProviderPreset là mục cấu hình Provider dùng chung cho Setup và lệnh /config.
+// ProviderPreset 是首次引导和运行时 /config 共用的 provider 目录项。
 type ProviderPreset struct {
 	Name           string
 	Label          string
@@ -49,20 +50,20 @@ type ProviderPreset struct {
 }
 
 var setupProviders = []setupProvider{
-	{name: "ollama", label: "Ollama (Cục bộ / Offline - Miễn phí)", baseURL: "http://localhost:11434/v1", apiKeyOptional: true},
-	{name: "openrouter", label: "OpenRouter (Claude, Gemini, DeepSeek, Qwen...)", baseURL: "https://openrouter.ai/api/v1"},
-	{name: "gemini", label: "Google Gemini", baseURL: ""},
-	{name: "anthropic", label: "Anthropic Claude", baseURL: ""},
-	{name: "deepseek", label: "DeepSeek", baseURL: "https://api.deepseek.com/v1"},
-	{name: "openai", label: "OpenAI", baseURL: ""},
-	{name: "qwen", label: "Alibaba Qwen (DashScope)", baseURL: ""},
-	{name: "glm", label: "Zhipu GLM", baseURL: ""},
-	{name: "grok", label: "xAI Grok", baseURL: ""},
-	{name: "bedrock", label: "AWS Bedrock", apiKeyOptional: true},
-	{name: "custom", label: "Custom Proxy (Proxy / API tùy chỉnh)", needType: true, apiKeyOptional: true},
+	{name: "openrouter", label: "OpenRouter", baseURL: "https://openrouter.ai/api/v1"},
+	{name: "anthropic", label: "Anthropic"},
+	{name: "gemini", label: "Gemini"},
+	{name: "openai", label: "OpenAI"},
+	{name: "deepseek", label: "DeepSeek"},
+	{name: "qwen", label: "Qwen"},
+	{name: "glm", label: "GLM"},
+	{name: "grok", label: "Grok"},
+	{name: "ollama", label: "Ollama", baseURL: "http://localhost:11434/v1", apiKeyOptional: true},
+	{name: "bedrock", label: "Bedrock", apiKeyOptional: true},
+	{name: "custom", label: "Custom Proxy", needType: true, apiKeyOptional: true},
 }
 
-// ProviderPresets trả về danh sách các thiết lập Provider mẫu.
+// ProviderPresets 返回一份可安全修改的预设列表。
 func ProviderPresets() []ProviderPreset {
 	out := make([]ProviderPreset, 0, len(setupProviders))
 	for _, preset := range setupProviders {
@@ -74,79 +75,78 @@ func ProviderPresets() []ProviderPreset {
 	return out
 }
 
-type setupLanguageOption struct {
-	code  string
-	label string
-}
+// RunSetup 运行首次引导，返回生成的配置。
+func RunSetup(languages ...utils.Language) (Config, error) {
+	language := utils.LanguageVI
+	if len(languages) > 0 && languages[0] != "" {
+		language = languages[0]
+	} else {
+		selected, err := runLanguageSelect()
+		if err != nil {
+			return Config{}, err
+		}
+		language = selected
+	}
 
-var languageOptions = []setupLanguageOption{
-	{code: "vi", label: "Tiếng Việt (Mặc định - Sáng tác văn phong Việt tự nhiên)"},
-	{code: "zh", label: "Tiếng Trung (Nguyên bản - Sáng tác bằng Tiếng Trung)"},
-}
-
-// RunSetup chạy trình hướng dẫn thiết lập lần đầu và trả về cấu hình tạo được.
-func RunSetup() (Config, error) {
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("99")).
-		Render("Chưa tìm thấy tệp cấu hình, bắt đầu khởi tạo thiết lập..."))
-	fmt.Fprintf(os.Stderr, "  Đường dẫn tệp cấu hình: %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(DefaultConfigPath()))
-	fmt.Fprintf(os.Stderr, "  Sau khi hoàn tất, bạn có thể chỉnh sửa tệp này để tùy biến nâng cao.\n")
-	fmt.Fprintln(os.Stderr)
-
-	// Step 1: Chọn Ngôn ngữ Sáng tác Truyện
-	selectedLang, err := runLanguageSelect()
-	if err != nil {
+	if _, err := utils.ParseLanguage(string(language)); err != nil {
 		return Config{}, err
 	}
-	printStepDone("Ngôn ngữ sáng tác", selectedLang.label)
 
-	// Step 2: Chọn Nhà cung cấp AI (Provider)
-	sp, err := runProviderSelect()
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("99")).
+		Render(setupText(language, "未检测到配置文件，开始初始化设置...", "Không tìm thấy file cấu hình, bắt đầu thiết lập...")))
+	fmt.Fprintf(os.Stderr, "  %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
+		setupText(language, "配置文件路径："+DefaultConfigPath(), "Đường dẫn file cấu hình: "+DefaultConfigPath())))
+	fmt.Fprintf(os.Stderr, "  %s\n", setupText(language, "完成后可随时编辑该文件调整高级设置。", "Bạn có thể chỉnh file này để thay đổi thiết lập nâng cao sau khi hoàn tất."))
+	fmt.Fprintln(os.Stderr)
+
+	// Step 1: 选择 Provider
+	sp, err := runProviderSelect(language)
 	if err != nil {
 		return Config{}, err
 	}
 
 	providerName := sp.name
 	var pc ProviderConfig
-	printStepDone("Nhà cung cấp AI", sp.label)
+	printStepDone(setupText(language, "Provider", "Provider"), sp.label)
 
-	// Tùy biến proxy: hỏi thêm tên và giao thức API
+	// 自定义代理：额外问名称和 API 协议类型
 	if sp.needType {
-		providerName, err = runTextInput("Tên Provider", "my-proxy")
+		providerName, err = runTextInput(setupText(language, "Provider 名称", "Tên Provider"), "my-proxy", language)
 		if err != nil {
 			return Config{}, err
 		}
-		providerType, err := runTypeSelect()
+		providerType, err := runTypeSelect(language)
 		if err != nil {
 			return Config{}, err
 		}
 		pc.Type = providerType
 	}
 
-	// Step 3: Nhập API Key
+	// Step 2: 输入 API Key
 	var apiKey string
 	if sp.apiKeyOptional {
-		apiKey, err = runOptionalTextInput("[3/5] API Key (Nhấn Enter để bỏ qua nếu dùng Ollama/Local)", "Để trống nếu không cần API Key")
+		apiKey, err = runOptionalTextInput(setupText(language, "[3/5] API Key（可留空）", "[3/5] API Key (có thể để trống)"), setupText(language, "留空表示不使用 API Key", "Để trống nếu không dùng API Key"), language)
 	} else {
-		apiKey, err = runTextInput("[3/5] API Key", "sk-xxx...")
+		apiKey, err = runTextInput(setupText(language, "[3/5] API Key", "[3/5] API Key"), "sk-xxx", language)
 	}
 	if err != nil {
 		return Config{}, err
 	}
 	pc.APIKey = apiKey
 	if apiKey == "" {
-		printStepDone("API Key", "Không sử dụng (Mặc định cho Ollama/Local)")
+		printStepDone("API Key", setupText(language, "未设置", "Chưa đặt"))
 	} else {
 		printStepDone("API Key", maskKey(apiKey))
 	}
 
-	// Step 4: Base URL (Nhấn Enter để dùng mặc định)
+	// Step 4: Base URL（直接回车使用官方默认地址）
 	baseDefault := sp.baseURL
-	baseHint := "Để trống dùng địa chỉ mặc định"
+	baseHint := setupText(language, "留空使用官方地址", "Để trống dùng địa chỉ mặc định")
 	if baseDefault != "" {
 		baseHint = baseDefault
 	}
-	baseURL, err := runTextInputWithDefault("[4/5] Base URL (Nhấn Enter để dùng địa chỉ mặc định, hoặc nhập địa chỉ proxy/Ollama)", baseHint, baseDefault)
+	baseURL, err := runTextInputWithDefault(setupText(language, "[4/5] Base URL（直接回车使用默认，代理用户填写代理地址）", "[4/5] Base URL (Enter dùng mặc định, proxy nhập địa chỉ proxy)"), baseHint, baseDefault, language)
 	if err != nil {
 		return Config{}, err
 	}
@@ -154,54 +154,70 @@ func RunSetup() (Config, error) {
 	if baseURL != "" {
 		printStepDone("Base URL", baseURL)
 	} else {
-		printStepDone("Base URL", "Mặc định")
+		printStepDone("Base URL", setupText(language, "默认", "Mặc định"))
 	}
 
-	// Step 5: Tên Model (bắt buộc)
-	modelPlaceholder := "Ví dụ: qwen2.5:14b / ainovel-qwen / google/gemini-2.5-flash / claude-3-5-sonnet"
-	if providerName == "ollama" {
-		modelPlaceholder = "Ví dụ: qwen2.5:14b / ainovel-qwen / qwen3:14b"
-	}
-	modelName, err := runTextInput("[5/5] Tên Model chính", modelPlaceholder)
+	// Step 5: 模型名（必填）
+	modelName, err := runTextInput(setupText(language, "[5/5] 模型名称", "[5/5] Tên model"), setupText(language, "例如：gpt-4o / claude-sonnet-4 / gemini-2.5-pro", "Ví dụ: gpt-4o / claude-sonnet-4 / gemini-2.5-pro"), language)
 	if err != nil {
 		return Config{}, err
 	}
-	printStepDone("Model", modelName)
+	printStepDone(setupText(language, "模型", "Model"), modelName)
 	pc.Models = []ModelConfig{{Name: modelName}}
 
 	cfg := Config{
 		Provider:  providerName,
 		ModelName: modelName,
+		Language:  string(language),
 		Providers: map[string]ProviderConfig{providerName: pc},
 		Roles:     map[string]RoleConfig{},
 		Style:     "default",
-		Language:  selectedLang.code,
 	}
 
-	// Lưu cấu hình
+	// 保存
 	path := DefaultConfigPath()
 	if err := SaveConfig(path, cfg); err != nil {
-		return cfg, fmt.Errorf("lỗi lưu cấu hình: %w", err)
+		return cfg, fmt.Errorf("save config: %w", err)
 	}
 
-	// Tạo file ví dụ mẫu
+	// 生成注释模板
 	saveExampleConfig()
 
+	// 全局偏好目录由启动流程（runWithConfig）统一创建，这里仅取路径用于提示
 	rulesDir := rules.DefaultHomeRulesDir()
 
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintf(os.Stderr, "%s Cấu hình đã được lưu tại: %s\n",
-		lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("✓"), path)
-	fmt.Fprintf(os.Stderr, "  Ngôn ngữ truyện: %s\n", selectedLang.label)
-	fmt.Fprintf(os.Stderr, "  Provider mặc định: %s\n", providerName)
-	fmt.Fprintf(os.Stderr, "  Model mặc định: %s\n", modelName)
-	fmt.Fprintln(os.Stderr, "  Bạn có thể dùng lệnh /config hoặc /model trong TUI để thay đổi bất cứ lúc nào.")
+	fmt.Fprintf(os.Stderr, "%s %s %s\n",
+		lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("✓"),
+		setupText(language, "配置已保存到", "Đã lưu cấu hình vào"), path)
+	fmt.Fprintf(os.Stderr, "  %s：%s\n", setupText(language, "默认模型", "Model mặc định"), modelName)
+	fmt.Fprintln(os.Stderr, setupText(language, "如需按角色配置不同模型，编辑配置文件即可。", "Để cấu hình model riêng cho từng vai trò, hãy chỉnh file cấu hình."))
 	if rulesDir != "" {
-		fmt.Fprintf(os.Stderr, "  Các quy tắc và phong cách viết cá nhân có thể đặt tại thư mục: %s\n", rulesDir)
+		fmt.Fprintf(os.Stderr, "  %s %s (.md, README.txt)\n", setupText(language, "全局写作偏好可放在", "Tùy chọn sáng tác có thể đặt trong"), rulesDir)
 	}
 	fmt.Fprintln(os.Stderr)
 
 	return cfg, nil
+}
+
+func setupText(lang utils.Language, zh, vi string) string {
+	if lang == utils.LanguageZH {
+		return zh
+	}
+	return vi
+}
+
+func localizedSetupProviders(lang utils.Language) []setupProvider {
+	items := append([]setupProvider(nil), setupProviders...)
+	if lang == utils.LanguageZH {
+		return items
+	}
+	for i := range items {
+		if items[i].name == "custom" {
+			items[i].label = "Proxy tùy chỉnh"
+		}
+	}
+	return items
 }
 
 func saveExampleConfig() {
@@ -212,7 +228,7 @@ func saveExampleConfig() {
 	_ = os.WriteFile(filepath.Join(dir, "config.example.jsonc"), []byte(exampleConfig), 0o644)
 }
 
-// printStepDone in dòng xác nhận hoàn thành một bước.
+// printStepDone 打印一步完成的确认行。
 func printStepDone(label, value string) {
 	fmt.Fprintf(os.Stderr, "  %s %s: %s\n",
 		lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("✓"),
@@ -227,33 +243,17 @@ func maskKey(key string) string {
 	return key[:4] + "****" + key[len(key)-4:]
 }
 
-// ---------- TUI Components ----------
+// ---------- TUI 组件 ----------
 
-func runLanguageSelect() (setupLanguageOption, error) {
-	items := make([]setupProvider, len(languageOptions))
-	for i, opt := range languageOptions {
-		items[i] = setupProvider{name: opt.code, label: opt.label}
+func runProviderSelect(languages ...utils.Language) (setupProvider, error) {
+	lang := utils.LanguageVI
+	if len(languages) > 0 {
+		lang = languages[0]
 	}
 	m := setupSelectModel{
-		title: "[1/5] Chọn Ngôn Ngữ Sáng Tác Nội Dung Truyện (Giao diện luôn là Tiếng Việt)",
-		items: items,
-	}
-	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
-	final, err := p.Run()
-	if err != nil {
-		return setupLanguageOption{}, err
-	}
-	result := final.(setupSelectModel)
-	if result.cancelled {
-		return setupLanguageOption{}, fmt.Errorf("đã hủy khởi tạo")
-	}
-	return languageOptions[result.cursor], nil
-}
-
-func runProviderSelect() (setupProvider, error) {
-	m := setupSelectModel{
-		title: "[2/5] Chọn Nhà Cung Cấp AI (Provider)",
-		items: setupProviders,
+		language: lang,
+		title:    setupText(lang, "[2/5] 选择 Provider", "[2/5] Chọn Provider"),
+		items:    localizedSetupProviders(lang),
 	}
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
 	final, err := p.Run()
@@ -262,21 +262,32 @@ func runProviderSelect() (setupProvider, error) {
 	}
 	result := final.(setupSelectModel)
 	if result.cancelled {
-		return setupProvider{}, fmt.Errorf("đã hủy khởi tạo")
+		return setupProvider{}, fmt.Errorf("setup cancelled")
 	}
 	return result.items[result.cursor], nil
 }
 
 var apiTypeOptions = []setupProvider{
-	{name: "openai", label: "Chuẩn OpenAI (Tương thích phần lớn các bên)"},
-	{name: "anthropic", label: "Chuẩn Anthropic"},
-	{name: "gemini", label: "Chuẩn Google Gemini"},
+	{name: "openai", label: "OpenAI 兼容"},
+	{name: "anthropic", label: "Anthropic 兼容"},
+	{name: "gemini", label: "Gemini 兼容"},
 }
 
-func runTypeSelect() (string, error) {
+func runTypeSelect(languages ...utils.Language) (string, error) {
+	lang := utils.LanguageVI
+	if len(languages) > 0 {
+		lang = languages[0]
+	}
+	items := append([]setupProvider(nil), apiTypeOptions...)
+	if lang != utils.LanguageZH {
+		items[0].label = "Tương thích OpenAI"
+		items[1].label = "Tương thích Anthropic"
+		items[2].label = "Tương thích Gemini"
+	}
 	m := setupSelectModel{
-		title: "Loại giao thức API (API Protocol Type)",
-		items: apiTypeOptions,
+		language: lang,
+		title:    setupText(lang, "API 协议类型", "Loại giao thức API"),
+		items:    items,
 	}
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
 	final, err := p.Run()
@@ -285,17 +296,21 @@ func runTypeSelect() (string, error) {
 	}
 	result := final.(setupSelectModel)
 	if result.cancelled {
-		return "", fmt.Errorf("đã hủy khởi tạo")
+		return "", fmt.Errorf("setup cancelled")
 	}
 	return result.items[result.cursor].name, nil
 }
 
-func runTextInput(label, placeholder string) (string, error) {
-	return runTextInputWithDefault(label, placeholder, "")
+func runTextInput(label, placeholder string, languages ...utils.Language) (string, error) {
+	return runTextInputWithDefault(label, placeholder, "", languages...)
 }
 
-func runOptionalTextInput(label, placeholder string) (string, error) {
-	m := setupInputModel{label: label, placeholder: placeholder, allowEmpty: true}
+func runOptionalTextInput(label, placeholder string, languages ...utils.Language) (string, error) {
+	lang := utils.LanguageVI
+	if len(languages) > 0 {
+		lang = languages[0]
+	}
+	m := setupInputModel{label: label, placeholder: placeholder, allowEmpty: true, language: lang}
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
 	final, err := p.Run()
 	if err != nil {
@@ -303,13 +318,17 @@ func runOptionalTextInput(label, placeholder string) (string, error) {
 	}
 	result := final.(setupInputModel)
 	if result.cancelled {
-		return "", fmt.Errorf("đã hủy khởi tạo")
+		return "", fmt.Errorf("setup cancelled")
 	}
 	return utils.CleanInputLine(result.value), nil
 }
 
-func runTextInputWithDefault(label, placeholder, defaultValue string) (string, error) {
-	m := setupInputModel{label: label, placeholder: placeholder, defaultValue: defaultValue}
+func runTextInputWithDefault(label, placeholder, defaultValue string, languages ...utils.Language) (string, error) {
+	lang := utils.LanguageVI
+	if len(languages) > 0 {
+		lang = languages[0]
+	}
+	m := setupInputModel{label: label, placeholder: placeholder, defaultValue: defaultValue, language: lang}
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
 	final, err := p.Run()
 	if err != nil {
@@ -317,7 +336,7 @@ func runTextInputWithDefault(label, placeholder, defaultValue string) (string, e
 	}
 	result := final.(setupInputModel)
 	if result.cancelled {
-		return "", fmt.Errorf("đã hủy khởi tạo")
+		return "", fmt.Errorf("setup cancelled")
 	}
 	if result.value == "" && result.defaultValue != "" {
 		return result.defaultValue, nil
@@ -325,7 +344,29 @@ func runTextInputWithDefault(label, placeholder, defaultValue string) (string, e
 	return utils.CleanInputLine(result.value), nil
 }
 
-// ---------- Select Component ----------
+// runLanguageSelect chooses the language for the initial setup.
+func runLanguageSelect() (utils.Language, error) {
+	m := setupSelectModel{
+		language: utils.LanguageVI,
+		title:    "[1/5] Ngôn ngữ / 语言",
+		items: []setupProvider{
+			{name: string(utils.LanguageVI), label: "Tiếng Việt"},
+			{name: string(utils.LanguageZH), label: "中文"},
+		},
+	}
+	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
+	final, err := p.Run()
+	if err != nil {
+		return "", err
+	}
+	result := final.(setupSelectModel)
+	if result.cancelled {
+		return "", fmt.Errorf("setup cancelled")
+	}
+	return utils.ParseLanguage(result.items[result.cursor].name)
+}
+
+// ---------- 选择器 ----------
 
 var (
 	setupCursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
@@ -335,6 +376,7 @@ var (
 )
 
 type setupSelectModel struct {
+	language  utils.Language
 	title     string
 	items     []setupProvider
 	cursor    int
@@ -377,17 +419,18 @@ func (m setupSelectModel) View() string {
 		}
 		b.WriteString(cursor + label + "\n")
 	}
-	b.WriteString(setupDimStyle.Render("\n  ↑↓ Chọn  Enter Xác nhận  Esc Hủy"))
+	b.WriteString(setupDimStyle.Render(setupText(m.language, "\n  ↑↓ 选择  Enter 确认  Esc 取消", "\n  ↑↓ chọn  Enter xác nhận  Esc hủy")))
 	return b.String()
 }
 
-// ---------- Input Component ----------
+// ---------- 文本输入 ----------
 
 type setupInputModel struct {
+	language     utils.Language
 	label        string
 	placeholder  string
-	defaultValue string
-	allowEmpty   bool
+	defaultValue string // 直接回车时使用的默认值
+	allowEmpty   bool   // 允许直接输入空值
 	value        string
 	cancelled    bool
 }
@@ -432,7 +475,7 @@ func (m setupInputModel) View() string {
 		b.WriteString(m.value)
 		b.WriteString(setupCursorStyle.Render("▌"))
 	}
-	b.WriteString(setupDimStyle.Render("  (Enter Xác nhận, Esc Hủy)"))
+	b.WriteString(setupDimStyle.Render(setupText(m.language, "  (Enter 确认, Esc 取消)", "  (Enter xác nhận, Esc hủy)")))
 	b.WriteString("\n")
 	return b.String()
 }

@@ -5,11 +5,12 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/assets"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/bootstrap"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
+	buildversion "github.com/JustinNguyen9979/ainovel-cli/internal/version"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/assets"
-	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/host"
-	buildversion "github.com/voocel/ainovel-cli/internal/version"
 )
 
 // Run 启动 TUI。
@@ -17,7 +18,7 @@ import (
 // 1. 快速模式、共创模式属于“启动编排”；
 // 2. 正式创作会话进入 host.Host；
 // 3. 未来若新增“续写已有小说”等共享模式，统一落到 internal/entry/startup。
-func Run(cfg bootstrap.Config, bundle assets.Bundle, build buildversion.Info) error {
+func Run(cfg bootstrap.Config, bundle assets.Bundle, build buildversion.Info, language utils.Language) error {
 	rt, err := host.New(cfg, bundle, host.WithFileLog("tui.log", false,
 		slog.String("version", build.Version),
 		slog.String("commit", build.Commit),
@@ -28,7 +29,8 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, build buildversion.Info) er
 	}
 	defer rt.Close()
 
-	m := NewModel(rt, build.Version)
+	m := NewModel(rt, build.Version, language)
+	m.disableUpdateCheck = cfg.DisableUpdateCheck
 	if logErr := rt.FileLogError(); logErr != nil {
 		logWarning := fmt.Errorf("文件日志不可用，已继续使用终端日志：%w", logErr)
 		m.err = logWarning

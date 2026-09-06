@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -16,8 +17,8 @@ type commandPaletteItem struct {
 	AutoExecute bool
 }
 
-func builtinCommandItems() []commandPaletteItem {
-	return commandRegistryInstance().PaletteItems()
+func builtinCommandItems(languages ...utils.Language) []commandPaletteItem {
+	return commandRegistryInstance(languages...).PaletteItems()
 }
 
 func scoreCommandItem(item commandPaletteItem, query string) int {
@@ -50,9 +51,9 @@ func scoreCommandItem(item commandPaletteItem, query string) int {
 	}
 }
 
-func commandCompletions(prefix string) []commandPaletteItem {
+func commandCompletions(prefix string, languages ...utils.Language) []commandPaletteItem {
 	query := strings.TrimSpace(strings.ToLower(prefix))
-	items := append([]commandPaletteItem(nil), builtinCommandItems()...)
+	items := append([]commandPaletteItem(nil), builtinCommandItems(languages...)...)
 	slices.SortStableFunc(items, func(a, b commandPaletteItem) int {
 		scoreA := scoreCommandItem(a, query)
 		scoreB := scoreCommandItem(b, query)
@@ -89,7 +90,7 @@ func (m *Model) syncCommandInputHighlight() {
 	if !ok {
 		return
 	}
-	if _, registered := commandRegistryInstance().Find(command.name); registered {
+	if _, registered := commandRegistryInstance(m.language).Find(command.name); registered {
 		m.commandToken = fields[0]
 	}
 }
@@ -106,7 +107,7 @@ func (m *Model) updateCommandPalette() {
 		return
 	}
 
-	items := commandCompletions(strings.TrimPrefix(text, "/"))
+	items := commandCompletions(strings.TrimPrefix(text, "/"), m.language)
 	m.compItems = items
 	m.compActive = len(items) > 0
 	if !m.compActive {
@@ -140,7 +141,7 @@ func (m *Model) acceptCommandCompletion() (commandPaletteItem, bool) {
 	return item, true
 }
 
-func renderCommandPalette(width int, items []commandPaletteItem, cursor int) string {
+func renderCommandPalette(width int, items []commandPaletteItem, cursor int, languages ...utils.Language) string {
 	if len(items) == 0 || width <= 0 {
 		return ""
 	}
@@ -194,16 +195,17 @@ func renderCommandPalette(width int, items []commandPaletteItem, cursor int) str
 	if selectedIdx < 0 || selectedIdx >= len(visible) {
 		selectedIdx = 0
 	}
-	hint := mutedStyle.Render("↑↓ 选择 · Tab/Enter 接受 · Esc 关闭")
-	usage := "Usage: " + visible[selectedIdx].Usage
+	lang := resolveLanguage(languages)
+	hint := mutedStyle.Render(ui(lang, "↑↓ 选择 · Tab/Enter 接受 · Esc 关闭", "↑↓ chọn · Tab/Enter xác nhận · Esc đóng"))
+	usage := ui(lang, "用法: ", "Cách dùng: ") + visible[selectedIdx].Usage
 	if remaining > 0 {
-		usage = usage + " · 还有 " + strconv.Itoa(remaining) + " 个命令"
+		usage += ui(lang, " · 还有 ", " · Còn ") + strconv.Itoa(remaining) + ui(lang, " 个命令", " lệnh")
 	}
 	usageLine := mutedStyle.Render(truncateWidth(usage, contentW))
 	body = append(body, usageLine+strings.Repeat(" ", max(0, contentW-lipgloss.Width(usageLine))))
 	body = append(body, hint+strings.Repeat(" ", max(0, contentW-lipgloss.Width(hint))))
 
-	return renderPaddedModalFrame(boxW, len(body)+2, "命令", "", body)
+	return renderPaddedModalFrame(boxW, len(body)+2, ui(lang, "命令", "Lệnh"), "", body)
 }
 
 func commandPaletteWindow(total, cursor, limit int) (start, end int) {

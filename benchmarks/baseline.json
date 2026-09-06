@@ -1,0 +1,12 @@
+{
+  "BenchmarkJSONFieldExtractor": {
+    "ns_per_op": 405.4,
+    "bytes_per_op": 136,
+    "allocs_per_op": 5
+  },
+  "BenchmarkStreamFilter": {
+    "ns_per_op": 729.0,
+    "bytes_per_op": 344,
+    "allocs_per_op": 22
+  }
+}

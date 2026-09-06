@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 )
 
 // Action 是 NextAction 从工作区事实推导出的下一步确定性动作。
@@ -206,13 +207,20 @@ func ResumeStatus(st *store.Store) (active, done bool, err error) {
 
 // ResumeSummary 生成未完成导入的一行提示（RFC §18.2）；无未完成导入返回空串。
 // 供宿主在启动/欢迎界面主动告知，避免用户只有在创作被门禁拒绝时才发现这本书停在导入半路。
-func ResumeSummary(st *store.Store) string {
+func ResumeSummary(st *store.Store, languages ...utils.Language) string {
+	lang := utils.LanguageVI
+	if len(languages) > 0 && languages[0] == utils.LanguageZH {
+		lang = utils.LanguageZH
+	}
 	w := OpenWorkspace(st.Dir())
 	if !w.Active() {
 		return ""
 	}
 	f, err := CollectFacts(st, w)
 	if err != nil {
+		if lang == utils.LanguageVI {
+			return "Phát hiện lỗi khi đọc trạng thái nhập: " + err.Error() + "; chạy /import để kiểm tra và sửa"
+		}
 		return "发现导入状态读取异常：" + err.Error() + "；请运行 /import 查看并修复"
 	}
 	var state string
@@ -220,17 +228,44 @@ func ResumeSummary(st *store.Store) string {
 	case ActionDone:
 		return ""
 	case ActionIngest, ActionSegment:
-		state = "尚未完成切分"
+		if lang == utils.LanguageVI {
+			state = "chưa hoàn tất phân đoạn"
+		} else {
+			state = "尚未完成切分"
+		}
 	case ActionAwaitConfirmation:
-		state = fmt.Sprintf("已切分 %d 章，等待核对确认", f.ExpectedChapters)
+		if lang == utils.LanguageVI {
+			state = fmt.Sprintf("đã phân đoạn %d chương, đang chờ xác nhận", f.ExpectedChapters)
+		} else {
+			state = fmt.Sprintf("已切分 %d 章，等待核对确认", f.ExpectedChapters)
+		}
 	case ActionAnalyze:
-		state = fmt.Sprintf("已分析 %d/%d 章", f.AnalyzedChapters, f.ExpectedChapters)
+		if lang == utils.LanguageVI {
+			state = fmt.Sprintf("đã phân tích %d/%d chương", f.AnalyzedChapters, f.ExpectedChapters)
+		} else {
+			state = fmt.Sprintf("已分析 %d/%d 章", f.AnalyzedChapters, f.ExpectedChapters)
+		}
 	case ActionSynthesize:
-		state = "逐章分析完成，待全书综合"
+		if lang == utils.LanguageVI {
+			state = "đã phân tích từng chương, đang chờ tổng hợp toàn bộ"
+		} else {
+			state = "逐章分析完成，待全书综合"
+		}
 	case ActionAwaitStoryResolution:
-		state = "待明确故事状态（--story=open|closed）"
+		if lang == utils.LanguageVI {
+			state = "đang chờ xác định trạng thái truyện (--story=open|closed)"
+		} else {
+			state = "待明确故事状态（--story=open|closed）"
+		}
 	case ActionPublish:
-		state = "综合完成，待发布正式状态"
+		if lang == utils.LanguageVI {
+			state = "đã tổng hợp xong, đang chờ công bố trạng thái chính thức"
+		} else {
+			state = "综合完成，待发布正式状态"
+		}
+	}
+	if lang == utils.LanguageVI {
+		return "Phát hiện bản nhập chưa hoàn tất (" + state + "), nhập /import để khôi phục từ điểm dừng"
 	}
 	return "发现未完成的导入（" + state + "），输入 /import 从断点恢复"
 }

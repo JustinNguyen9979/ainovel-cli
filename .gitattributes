@@ -1,3 +1,3 @@
-# 行尾统一固化:blob 与工作区一律 LF,覆盖各机器的 core.autocrlf 差异。
-# 仓库全部 blob 本就以 LF 入库;Windows 上混用行尾的工具曾制造大量幻影变更。
+# Cố định LF cho cả blob và worktree, không phụ thuộc core.autocrlf của từng máy.
+# Kho mã vốn dùng LF; quy tắc này tránh thay đổi giả do công cụ Windows trộn kiểu xuống dòng.
 * text=auto eol=lf

@@ -2,56 +2,22 @@ package host
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-// 冷启动共创：从零澄清需求，产出整本书的创作指令。
-const coCreateSystemPrompt = `你是一个小说共创助手。你的任务不是直接开始写小说，而是通过多轮简短对话帮助用户澄清创作需求，并持续整理出一段可直接交给创作引擎的中文创作指令。
-
-每一轮回复严格按以下 XML 格式输出，包含四个标签，依次出现，每个标签都必须有正确的开闭标签：
-
-<reply>
-给用户看的中文自然回复：先回应用户的输入，再最多提出 1 到 2 个当前最关键的问题。如果信息已足够开始创作，告诉用户可以按 Ctrl+S 开始。
-</reply>
-
-<draft>
-当前完整的创作指令草稿，使用 Markdown：直接从二级标题开始，例如 "## 主题"、"## 关键要素"、"## 待澄清信息"；用项目符号列出要点。每一轮都要在已有结论上**累积更新**，吸收用户最新意图；即使本轮没有新增也要把完整草稿原样再写一次——不要省略、不要写"（保持上一轮）"之类的占位。
-</draft>
-` + coCreateProtocolTail
-
-// 阶段共创：小说已写了一部分，规划"后续阶段"的走向。调用方需把当前故事状态摘要
-// 追加到本 prompt 之后（"## 当前故事状态" 段），让模型在已写内容的基础上规划。
-const stageCoCreateSystemPrompt = `你是一个小说"阶段共创"助手。这本小说已经写了一部分（进度见下方"当前故事状态"）。用户暂停下来，想和你一起规划"后续阶段"的走向，再继续创作。
-
-你的任务不是续写正文，而是通过多轮简短对话帮用户想清楚后面这一段（接下来若干章 / 下一弧 / 下一卷）要往哪走，并持续整理出一段"后续方向 brief"，供创作引擎据此推进。
-
-铁律：所有建议必须与"当前故事状态"里已发生的剧情、人物、伏笔一致，绝不推翻或忽略已写内容；只规划"后续怎么走"，不重新设计整本书。
-
-每一轮回复严格按以下 XML 格式输出，包含四个标签，依次出现，每个标签都必须有正确的开闭标签：
-
-<reply>
-给用户看的中文自然回复：先回应用户的输入，再最多提出 1 到 2 个当前最关键的问题。如果后续方向已足够清晰，告诉用户可以按 Ctrl+S 把方向交给创作引擎、继续创作。
-</reply>
-
-<draft>
-当前完整的"后续方向 brief"，使用 Markdown：直接从二级标题开始，例如 "## 后续走向"、"## 关键转折"、"## 要收的伏笔"、"## 节奏与篇幅"；用项目符号列出要点。每一轮都要在已有结论上**累积更新**，吸收用户最新意图；即使本轮没有新增也要把完整 brief 原样再写一次——不要省略、不要写"（保持上一轮）"之类的占位。
-</draft>
-` + coCreateProtocolTail
-
-// coCreateProtocolTail 是两种共创模式共用的输出协议尾部（<ready> / <suggestions> + 输出规范）。
-// 两模式只在开场语境与 <draft> 语义上不同，协议完全一致。
-const coCreateProtocolTail = `
+const coCreateProtocolTailZH = `
 <ready>false</ready>
 
 <suggestions>
-1-3 条"用户接下来可能想说的话"，每行一条以 "- " 开头。这是用户卡壳时的引导，
+1-3 条“用户接下来可能想说的话”，每行一条以 “- ” 开头。这是用户卡壳时的引导，
 按数字键填入输入框，用户可再编辑后发送。
 
 要求：
@@ -67,6 +33,131 @@ const coCreateProtocolTail = `
 - <draft> 内允许多行 Markdown，直接换行书写，不需要任何转义。
 - <ready> 只写 true 或 false。信息已足够时填 true。
 - <ready>true</ready> 时 <suggestions> 可以为空（保留空标签 <suggestions></suggestions> 即可）。`
+
+const coCreateProtocolTailVI = `
+<ready>false</ready>
+
+<suggestions>
+1-3 câu “điều người dùng có thể muốn nói tiếp”, mỗi câu một dòng bắt đầu bằng “- ”. Đây là gợi ý khi người dùng chưa biết nói gì,
+người dùng có thể nhấn phím số để điền rồi chỉnh sửa trước khi gửi.
+
+Yêu cầu:
+- Viết theo ngôi người dùng, giống như người dùng đang nói với bạn, không viết thành câu hỏi ngược của trợ lý.
+- Mỗi câu không quá 25 từ, đa dạng cách diễn đạt, tránh lặp lại.
+- Gợi ý một khuynh hướng, lựa chọn hoặc ý muốn bổ sung; không tự viết thay toàn bộ thiết lập.
+</suggestions>
+
+Quy tắc đầu ra:
+- Bắt buộc dùng đủ bốn thẻ XML: <reply> / <draft> / <ready> / <suggestions>, mỗi thẻ phải có thẻ mở và đóng đầy đủ.
+- Tên thẻ chỉ được dùng chữ tiếng Anh viết thường; không đổi thành <REPLY> / <REWRITE> / <回复> hay biến thể nào khác.
+- Bên ngoài các thẻ không được thêm giải thích, phần suy nghĩ hay code fence.
+- <draft> được chứa Markdown nhiều dòng, viết xuống dòng trực tiếp, không cần escape.
+- <ready> chỉ được ghi true hoặc false. Ghi true khi thông tin đã đủ để bắt đầu sáng tác.
+- Khi <ready>true</ready>, <suggestions> có thể để trống nhưng vẫn giữ cặp thẻ <suggestions></suggestions>.`
+
+const coCreateSystemPromptZH = `你是一个小说共创助手。你的任务不是直接开始写小说，而是通过多轮简短对话帮助用户澄清创作需求，并持续整理出一段可直接交给创作引擎的中文创作指令。
+
+如果模型提供独立的思考流，思考内容也必须使用中文；不要在思考流中使用越南语。最终回复、草稿和建议同样必须使用中文。
+
+每一轮回复严格按以下 XML 格式输出，包含四个标签，依次出现，每个标签都必须有正确的开闭标签：
+
+<reply>
+给用户看的中文自然回复：先回应用户的输入，再最多提出 1 到 2 个当前最关键的问题。如果信息已足够开始创作，告诉用户可以按 Ctrl+S 开始。
+</reply>
+
+<draft>
+当前完整的创作指令草稿，使用 Markdown：直接从二级标题开始，例如 “## 主题”、“## 关键要素”、“## 待澄清信息”；用项目符号列出要点。每一轮都要在已有结论上**累积更新**，吸收用户最新意图；即使本轮没有新增也要把完整草稿原样再写一次——不要省略、不要写“（保持上一轮）”之类的占位。
+</draft>
+` + coCreateProtocolTailZH
+
+const coCreateSystemPromptVI = `Bạn là trợ lý đồng sáng tác tiểu thuyết. Nhiệm vụ của bạn không phải bắt đầu viết tiểu thuyết ngay, mà là qua nhiều lượt đối thoại ngắn giúp người dùng làm rõ yêu cầu sáng tác và liên tục tổng hợp thành một chỉ dẫn sáng tác bằng tiếng Việt có thể đưa trực tiếp cho công cụ sáng tác.
+
+Nếu model cung cấp luồng suy nghĩ riêng, phần suy nghĩ cũng phải dùng tiếng Việt; không dùng tiếng Trung trong luồng suy nghĩ. Câu trả lời cuối, bản thảo và gợi ý cũng phải dùng tiếng Việt, trừ tên riêng hoặc nội dung người dùng yêu cầu giữ nguyên.
+
+Mỗi lượt trả lời phải tuân thủ đúng định dạng XML dưới đây, gồm bốn thẻ theo đúng thứ tự và mỗi thẻ phải có thẻ mở, thẻ đóng đầy đủ:
+
+<reply>
+Phản hồi tự nhiên bằng tiếng Việt cho người dùng: trước hết trả lời ý người dùng, sau đó hỏi tối đa 1 đến 2 câu hỏi quan trọng nhất ở thời điểm hiện tại. Nếu thông tin đã đủ để bắt đầu sáng tác, hãy nói người dùng có thể nhấn Ctrl+S để bắt đầu.
+</reply>
+
+<draft>
+Bản đầy đủ của chỉ dẫn sáng tác hiện tại, viết bằng Markdown: bắt đầu trực tiếp từ tiêu đề cấp hai, ví dụ “## Chủ đề”, “## Yếu tố quan trọng”, “## Thông tin cần làm rõ”; dùng gạch đầu dòng cho các ý. Mỗi lượt phải **tích lũy cập nhật** trên các kết luận trước đó và tiếp nhận ý định mới nhất của người dùng; kể cả khi không có thông tin mới, vẫn phải viết lại toàn bộ bản thảo, không được lược bỏ hoặc ghi chỗ trống như “(giữ nguyên lượt trước)”.
+</draft>
+` + coCreateProtocolTailVI
+
+const stageCoCreateSystemPromptZH = `你是一个小说“阶段共创”助手。这本小说已经写了一部分（进度见下方“当前故事状态”）。用户暂停下来，想和你一起规划“后续阶段”的走向，再继续创作。
+
+你的任务不是续写正文，而是通过多轮简短对话帮用户想清楚后面这一段（接下来若干章 / 下一弧 / 下一卷）要往哪走，并持续整理出一段“后续方向 brief”，供创作引擎据此推进。
+
+如果模型提供独立的思考流，思考内容也必须使用中文；不要在思考流中使用越南语。最终回复、brief 和建议同样必须使用中文。
+
+铁律：所有建议必须与“当前故事状态”里已发生的剧情、人物、伏笔一致，绝不推翻或忽略已写内容；只规划“后续怎么走”，不重新设计整本书。
+
+每一轮回复严格按以下 XML 格式输出，包含四个标签，依次出现，每个标签都必须有正确的开闭标签：
+
+<reply>
+给用户看的中文自然回复：先回应用户的输入，再最多提出 1 到 2 个当前最关键的问题。如果后续方向已足够清晰，告诉用户可以按 Ctrl+S 把方向交给创作引擎、继续创作。
+</reply>
+
+<draft>
+当前完整的“后续方向 brief”，使用 Markdown：直接从二级标题开始，例如 “## 后续走向”、“## 关键转折”、“## 要收的伏笔”、“## 节奏与篇幅”；用项目符号列出要点。每一轮都要在已有结论上**累积更新**，吸收用户最新意图；即使本轮没有新增也要把完整 brief 原样再写一次——不要省略、不要写“（保持上一轮）”之类的占位。
+</draft>
+` + coCreateProtocolTailZH
+
+const stageCoCreateSystemPromptVI = `Bạn là trợ lý “đồng sáng tác theo giai đoạn”. Cuốn tiểu thuyết này đã được viết một phần (tiến độ nằm trong “trạng thái câu chuyện hiện tại” bên dưới). Người dùng đã tạm dừng để cùng bạn lập kế hoạch hướng đi cho “giai đoạn tiếp theo”, rồi tiếp tục sáng tác.
+
+Nhiệm vụ của bạn không phải viết tiếp nội dung, mà là qua nhiều lượt đối thoại ngắn giúp người dùng làm rõ hướng đi của phần tiếp theo (một vài chương kế tiếp / một cung truyện / một tập), rồi liên tục tổng hợp thành một brief hướng đi để công cụ sáng tác triển khai.
+
+Nếu model cung cấp luồng suy nghĩ riêng, phần suy nghĩ cũng phải dùng tiếng Việt; không dùng tiếng Trung trong luồng suy nghĩ. Câu trả lời cuối, brief và gợi ý cũng phải dùng tiếng Việt, trừ tên riêng hoặc nội dung người dùng yêu cầu giữ nguyên.
+
+Nguyên tắc bắt buộc: mọi đề xuất phải nhất quán với diễn biến, nhân vật và tình tiết còn bỏ ngỏ đã có trong “trạng thái câu chuyện hiện tại”; tuyệt đối không phủ nhận hoặc bỏ qua nội dung đã viết. Chỉ lập kế hoạch cho “hướng đi tiếp theo”, không thiết kế lại toàn bộ tiểu thuyết.
+
+Mỗi lượt trả lời phải tuân thủ đúng định dạng XML dưới đây, gồm bốn thẻ theo đúng thứ tự và mỗi thẻ phải có thẻ mở, thẻ đóng đầy đủ:
+
+<reply>
+Phản hồi tự nhiên bằng tiếng Việt cho người dùng: trước hết trả lời ý người dùng, sau đó hỏi tối đa 1 đến 2 câu hỏi quan trọng nhất ở thời điểm hiện tại. Nếu hướng đi tiếp theo đã đủ rõ, hãy nói người dùng có thể nhấn Ctrl+S để giao hướng đi cho công cụ sáng tác và tiếp tục.
+</reply>
+
+<draft>
+Brief đầy đủ về hướng đi tiếp theo, viết bằng Markdown: bắt đầu trực tiếp từ tiêu đề cấp hai, ví dụ “## Hướng đi tiếp theo”, “## Bước ngoặt quan trọng”, “## Tình tiết cần khép lại”, “## Nhịp độ và độ dài”; dùng gạch đầu dòng cho các ý. Mỗi lượt phải **tích lũy cập nhật** trên các kết luận trước đó và tiếp nhận ý định mới nhất của người dùng; kể cả khi không có thông tin mới, vẫn phải viết lại toàn bộ brief, không được lược bỏ hoặc ghi chỗ trống như “(giữ nguyên lượt trước)”.
+</draft>
+` + coCreateProtocolTailVI
+
+func coCreateLanguage(languages []utils.Language) utils.Language {
+	if len(languages) > 0 && languages[0] == utils.LanguageZH {
+		return utils.LanguageZH
+	}
+	return utils.LanguageVI
+}
+
+func hostLanguage(value string) utils.Language {
+	lang, err := utils.ParseLanguage(value)
+	if err != nil {
+		return utils.LanguageVI
+	}
+	return lang
+}
+
+func localizedCoCreateEvent(lang utils.Language, zh, vi string) string {
+	if lang == utils.LanguageZH {
+		return zh
+	}
+	return vi
+}
+
+func coCreateSystemPrompt(languages ...utils.Language) string {
+	if coCreateLanguage(languages) == utils.LanguageVI {
+		return coCreateSystemPromptVI
+	}
+	return coCreateSystemPromptZH
+}
+
+func stageCoCreateSystemPrompt(languages ...utils.Language) string {
+	if coCreateLanguage(languages) == utils.LanguageVI {
+		return stageCoCreateSystemPromptVI
+	}
+	return stageCoCreateSystemPromptZH
+}
 
 // CoCreateProgressKind 标识流式回调的内容类型。
 const (
@@ -84,96 +175,117 @@ const (
 	tagSuggestions = "suggestions"
 )
 
-func coCreateStream(ctx context.Context, models *bootstrap.ModelSet, sessions *store.SessionStore, sysPrompt string, history []CoCreateMessage, onProgress func(kind, text string)) (reply CoCreateReply, err error) {
+const maxCoCreateTokens = 8192
+const maxCoCreateStreamAttempts = 2
+
+func coCreateStream(ctx context.Context, model agentcore.ChatModel, sessions *store.SessionStore, sysPrompt string, history []CoCreateMessage, thinking agentcore.ThinkingLevel, onProgress func(kind, text string)) (reply CoCreateReply, err error) {
 	if len(history) == 0 {
 		return CoCreateReply{}, fmt.Errorf("cocreate history is empty")
 	}
+	if model == nil {
+		return CoCreateReply{}, fmt.Errorf("cocreate model is not configured")
+	}
 
-	model := models.ForRole("thinking")
+	start := time.Now()
+	var lastErr error
+	for attempt := 1; attempt <= maxCoCreateStreamAttempts; attempt++ {
+		reply, raw, thinking, clean, runErr := runCoCreateStreamAttempt(ctx, model, sysPrompt, history, thinking, onProgress)
+		if runErr == nil && clean {
+			err = nil
+			logCoCreateSession(sessions, start, history, raw, thinking, reply, nil)
+			return reply, nil
+		}
+		lastErr = runErr
+		if !isRetryableCoCreateStreamError(runErr, clean) || attempt == maxCoCreateStreamAttempts {
+			break
+		}
+	}
+	if lastErr == nil {
+		lastErr = agentcore.ErrStreamPartial
+	}
+	logCoCreateSession(sessions, start, history, "", "", CoCreateReply{}, lastErr)
+	return CoCreateReply{}, fmt.Errorf("cocreate generate: %w", lastErr)
+}
 
+func runCoCreateStreamAttempt(ctx context.Context, model agentcore.ChatModel, sysPrompt string, history []CoCreateMessage, thinking agentcore.ThinkingLevel, onProgress func(kind, text string)) (reply CoCreateReply, raw, thinkingText string, clean bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	defer cancel()
+	options := []agentcore.CallOption{agentcore.WithMaxTokens(maxCoCreateTokens)}
+	if thinking != "" {
+		options = append(options, agentcore.WithThinking(thinking))
+	}
 	msgs := []agentcore.Message{agentcore.SystemMsg(sysPrompt)}
 	for _, item := range history {
 		content := strings.TrimSpace(item.Content)
 		if content == "" {
 			continue
 		}
-		switch strings.ToLower(strings.TrimSpace(item.Role)) {
-		case "assistant":
+		if strings.EqualFold(strings.TrimSpace(item.Role), "assistant") {
 			msgs = append(msgs, assistantMsg(content))
-		default:
+		} else {
 			msgs = append(msgs, agentcore.UserMsg(content))
 		}
 	}
-
-	var raw, thinking strings.Builder
-
-	// 排查 "cocreate empty response" 等偶发问题需要看到模型实际返回什么。
-	// 每轮全程落盘到 <output>/meta/sessions/cocreate.jsonl，与正式创作的 session 日志同位。
-	start := time.Now()
-	defer func() {
-		if sessions == nil {
-			return
-		}
-		if logErr := sessions.LogCoCreate(coCreateLogEntry{
-			Time:         time.Now(),
-			DurationMS:   time.Since(start).Milliseconds(),
-			InputHistory: history,
-			RawResponse:  raw.String(),
-			RawLen:       len([]rune(raw.String())),
-			Thinking:     thinking.String(),
-			ParsedReply:  reply.Message,
-			ParsedDraft:  reply.Prompt,
-			ParsedReady:  reply.Ready,
-			ParsedSugs:   reply.Suggestions,
-			Error:        errString(err),
-		}); logErr != nil {
-			slog.Warn("共创会话日志落盘失败", "module", "cocreate", "err", logErr)
-		}
-	}()
-
-	streamCh, err := model.GenerateStream(ctx, msgs, nil, agentcore.WithMaxTokens(2048))
-	if err != nil {
-		return CoCreateReply{}, fmt.Errorf("cocreate generate: %w", err)
+	var rawBuf, thinkingBuf strings.Builder
+	streamCh, streamErr := model.GenerateStream(ctx, msgs, nil, options...)
+	if streamErr != nil {
+		return CoCreateReply{}, "", "", false, streamErr
 	}
-
-	var streamed bool
+	clean = false
 	for ev := range streamCh {
 		switch ev.Type {
 		case agentcore.StreamEventThinkingDelta:
-			thinking.WriteString(ev.Delta)
+			thinkingBuf.WriteString(ev.Delta)
 			if onProgress != nil {
-				onProgress(CoCreateProgressThinking, thinking.String())
+				onProgress(CoCreateProgressThinking, thinkingBuf.String())
 			}
 		case agentcore.StreamEventTextDelta:
-			streamed = true
-			raw.WriteString(ev.Delta)
+			rawBuf.WriteString(ev.Delta)
 			if onProgress != nil {
-				onProgress(CoCreateProgressReply, extractReplyPreview(raw.String()))
+				onProgress(CoCreateProgressReply, extractReplyPreview(rawBuf.String()))
 			}
 		case agentcore.StreamEventDone:
-			if !streamed {
-				raw.WriteString(ev.Message.TextContent())
+			clean = true
+			if rawBuf.Len() == 0 {
+				rawBuf.WriteString(ev.Message.TextContent())
 			}
 		case agentcore.StreamEventError:
 			if ev.Err != nil {
-				return CoCreateReply{}, fmt.Errorf("cocreate generate: %w", ev.Err)
+				return CoCreateReply{}, rawBuf.String(), thinkingBuf.String(), false, ev.Err
 			}
-			return CoCreateReply{}, fmt.Errorf("cocreate generate failed")
+			return CoCreateReply{}, rawBuf.String(), thinkingBuf.String(), false, fmt.Errorf("cocreate generate failed")
 		}
 	}
+	if !clean {
+		return CoCreateReply{}, rawBuf.String(), thinkingBuf.String(), false, agentcore.ErrStreamPartial
+	}
+	raw = rawBuf.String()
+	if strings.TrimSpace(raw) == "" {
+		raw = thinkingBuf.String()
+	}
+	reply, err = parseCoCreateResponse(raw)
+	return reply, raw, thinkingBuf.String(), true, err
+}
 
-	// Channel fallback：思考型模型（R1/GLM-Z1/QwQ 等）偶发把完整答案写进
-	// reasoning_content 后没切回 final answer 通道，导致 raw 为空但 thinking 含
-	// 完整四段。实测见 meta/sessions/cocreate.jsonl —— 直接拿 thinking 当 raw 解析，
-	// 协议层已有降级处理（无 [REPLY] 标记时整段当 reply），救场后 UI 体验无差别。
-	rawText := raw.String()
-	if strings.TrimSpace(rawText) == "" {
-		if t := strings.TrimSpace(thinking.String()); t != "" {
-			rawText = t
-		}
+func isRetryableCoCreateStreamError(err error, clean bool) bool {
+	if clean || err == nil || errors.Is(err, context.Canceled) {
+		return false
 	}
-	reply, err = parseCoCreateResponse(rawText)
-	return reply, err
+	return errors.Is(err, agentcore.ErrStreamPartial) || strings.Contains(err.Error(), "stream ended before [DONE]")
+}
+
+func logCoCreateSession(sessions *store.SessionStore, start time.Time, history []CoCreateMessage, raw, thinking string, reply CoCreateReply, runErr error) {
+	if sessions == nil {
+		return
+	}
+	if logErr := sessions.LogCoCreate(coCreateLogEntry{
+		Time: time.Now(), DurationMS: time.Since(start).Milliseconds(), InputHistory: history,
+		RawResponse: raw, RawLen: len([]rune(raw)), Thinking: thinking,
+		ParsedReply: reply.Message, ParsedDraft: reply.Prompt, ParsedReady: reply.Ready,
+		ParsedSugs: reply.Suggestions, Error: errString(runErr),
+	}); logErr != nil {
+		slog.Warn("共创会话日志落盘失败", "module", "cocreate", "err", logErr)
+	}
 }
 
 // coCreateLogEntry 是写入 meta/sessions/cocreate.jsonl 的一行结构。

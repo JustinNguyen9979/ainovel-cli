@@ -1,4 +1,4 @@
-module github.com/voocel/ainovel-cli
+module github.com/JustinNguyen9979/ainovel-cli
 
 go 1.25.5
 
@@ -9,8 +9,9 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/gofrs/flock v0.13.0
 	github.com/muesli/termenv v0.16.0
-	github.com/voocel/agentcore v1.8.2
+	github.com/voocel/agentcore v1.8.3
 	github.com/voocel/litellm v1.8.10
+	golang.org/x/mod v0.40.0
 	golang.org/x/text v0.41.0
 )
 
