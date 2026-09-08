@@ -19,7 +19,7 @@ func TestNotifierFilteringAndCommandDelivery(t *testing.T) {
 		t.Fatal("nil event filter should allow all")
 	}
 	nt := Notification{Kind: KindBudget, Level: "warn", Title: "title", Body: "body"}
-	cmd := New("cat >/dev/null", nil)
+	cmd := New("exit 0", nil)
 	if err := cmd.deliverError(nt); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestNotifierFilteringAndCommandDelivery(t *testing.T) {
 	if got := notificationEnv(nt); len(got) == 0 || !containsEnv(got, "NOTIFY_KIND="+KindBudget) || !containsEnv(got, "NOTIFY_BODY=body") {
 		t.Fatal("notification env missing fields")
 	}
-	if err := runCommand(context.Background(), "printf %s >/dev/null", nt); err != nil {
+	if err := runCommand(context.Background(), "exit 0", nt); err != nil {
 		t.Fatal(err)
 	}
 	if got := appleScriptString(`a\"b`); !strings.Contains(got, `\\`) || !strings.Contains(got, `\"`) {

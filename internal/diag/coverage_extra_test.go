@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
 	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
@@ -73,13 +74,31 @@ func TestCaptureRuntimeCoversSessionAndLogBranches(t *testing.T) {
 	}
 	writeSessionAt(t, dir, filepath.Join("agents", "writer-ch07.jsonl"), messages)
 	writeSessionAt(t, dir, filepath.Join("agents", "architect.jsonl"), []agentcore.Message{{Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("architect prose")}}})
-	writeSessionAt(t, dir, filepath.Join("agents", "ignored.jsonl"), []agentcore.Message{{Role: agentcore.RoleAssistant, Content: []agentcore.ContentBlock{agentcore.TextBlock("old prose")}}})
+	if _, err := os.Stat(filepath.Join(dir, "meta", "sessions", "agents", "writer-ch07.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "meta", "sessions", "agents", "architect.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep the writer session newer on filesystems with coarse timestamp precision.
+	now := time.Now()
+	if err := os.Chtimes(filepath.Join(dir, "meta", "sessions", "agents", "architect.jsonl"), now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(dir, "meta", "sessions", "agents", "writer-ch07.jsonl"), now, now); err != nil {
+		t.Fatal(err)
+	}
+
 	badPath := filepath.Join(dir, "meta", "sessions", "agents", "writer-ch07.jsonl")
 	data, err := os.ReadFile(badPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(badPath, append(data, []byte("{malformed\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(badPath, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "logs"), 0o755); err != nil {

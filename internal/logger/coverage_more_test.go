@@ -27,7 +27,9 @@ func TestLoggerSetupAndFileLogger(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), "日志会话开始") || !strings.Contains(string(data), "日志会话结束") {
 		t.Fatalf("file log = %q/%v", data, err)
 	}
-	if _, cleanup, err := FileLogger(filepath.Join(dir, "file"), "x.log"); err != nil || cleanup == nil {
+	_, secondCleanup, err := FileLogger(filepath.Join(dir, "file"), "x.log")
+	if err != nil || secondCleanup == nil {
 		t.Fatalf("second file logger = %v", err)
 	}
+	secondCleanup()
 }

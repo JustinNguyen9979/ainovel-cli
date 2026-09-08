@@ -9,10 +9,18 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
 func TestUpdateValidatesInputsAndCurrentVersion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		_, err := Update(context.Background(), UpdateOptions{Repo: "owner/repo", BinaryName: "ainovel-cli"})
+		if err == nil || !strings.Contains(err.Error(), "Windows") {
+			t.Fatalf("Windows update should be rejected: %v", err)
+		}
+		return
+	}
 	if _, err := Update(context.Background(), UpdateOptions{}); err == nil {
 		t.Fatal("missing repo should fail")
 	}
