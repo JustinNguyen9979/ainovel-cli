@@ -140,6 +140,21 @@ func TestProjectValue_ProseArgRedacted(t *testing.T) {
 }
 
 // TestWriteExport_WritesFile chứng minh đường dẫn hàm thuần túy: không phụ thuộc TUI, ghi ra đường dẫn tương đối cố định.
+func TestExportCreatesDiagnosticFile(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	path, err := Export(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWriteExport_WritesFile(t *testing.T) {
 	dir := writeSession(t, filepath.Join("agents", "writer-ch07.jsonl"), []agentcore.Message{commitCall(`"7"`), errResult("boom")})
 	s := store.NewStore(dir)
@@ -165,6 +180,15 @@ func TestWriteExport_WritesFile(t *testing.T) {
 }
 
 // TestRedactMessage_DupSha chứng minh rằng cùng một đoạn văn xuất hiện lặp lại sẽ tạo ra cùng sha (tín hiệu vòng lặp).
+func TestRenderExportKindsAndEmptySignals(t *testing.T) {
+	rep := Report{Stats: Stats{Phase: "writing", Flow: "writing"}}
+	rc := RuntimeCapture{GoOS: "darwin", GoArch: "arm64", LogKinds: map[string]int{"z": 2, "a": 1}, Tail: []SkelEvent{{Agent: "writer", Role: "assistant", ErrClass: "error"}}}
+	text := string(RenderExport(rep, rc))
+	if !strings.Contains(text, "a ×1 · z ×2") || !strings.Contains(text, "err: error") || !strings.Contains(text, "Phân loại lỗi log") {
+		t.Fatalf("render output = %s", text)
+	}
+}
+
 func TestRedactMessage_DupSha(t *testing.T) {
 	a := redactMessage("writer-ch07", agentcore.Message{
 		Role:    agentcore.RoleAssistant,

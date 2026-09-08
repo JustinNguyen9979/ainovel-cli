@@ -1049,6 +1049,150 @@ func containsRecallSummary(items []domain.RecallItem, want string) bool {
 	return false
 }
 
+func TestContextPureHelperMatrices(t *testing.T) {
+	samples := []any{
+		[]domain.ChapterSummary{{}},
+		[]domain.ArcSummary{{}},
+		[]domain.VolumeSummary{{}},
+		[]domain.CharacterSnapshot{{}},
+		[]domain.TimelineEvent{{}},
+		[]domain.ForeshadowEntry{{}},
+		[]domain.RelationshipEntry{{}},
+		[]domain.StateChange{{}},
+		[]domain.VolumeOutline{{}},
+		[]domain.Character{{}},
+		[]domain.RelatedChapter{{}},
+		[]domain.RecallItem{{}},
+		[]planningVolumeOutline{{}},
+		"text",
+		123,
+	}
+	for _, sample := range samples {
+		if got := sliceLen(sample); got != 1 && got != 0 {
+			t.Fatalf("sliceLen(%T) = %d", sample, got)
+		}
+	}
+	if sliceLen(nil) != 0 || firstSliceLen([]domain.Character(nil), []domain.Character{{Name: "x"}}) != 1 || firstSliceLen([]domain.Character(nil)) != 0 {
+		t.Fatal("slice length fallback mismatch")
+	}
+	if !matchCharacter("林砚在门外", domain.Character{Name: "林砚"}) || !matchCharacter("炎哥出现", domain.Character{Name: "林砚", Aliases: []string{"炎哥"}}) || matchCharacter("无人", domain.Character{Name: "林砚", Aliases: []string{"炎哥"}}) {
+		t.Fatal("character matching mismatch")
+	}
+	chars := []domain.Character{{Name: "林砚", Aliases: []string{"炎哥"}}, {Name: "沈曜"}}
+	if got := matchOutlineCharacters("炎哥与沈曜会面", chars); len(got) != 2 || got[0] != "林砚" || got[1] != "沈曜" {
+		t.Fatalf("outline character matching = %#v", got)
+	}
+	changes := []domain.StateChange{{Chapter: 20, Entity: "林砚"}, {Chapter: 35, Entity: "沈曜"}, {Chapter: 40, Entity: "林砚"}}
+	if got := findLastStateChange(changes, "林砚", 40); got != 20 || findLastStateChange(changes, "沈曜", 40) != 35 || findLastStateChange(changes, "missing", 40) != 0 {
+		t.Fatal("last state change mismatch")
+	}
+	aging := agingForeshadow([]domain.ForeshadowEntry{
+		{ID: "new", PlantedAt: 45}, {ID: "old", PlantedAt: 1}, {ID: "picked", PlantedAt: 2}, {ID: "invalid", PlantedAt: 0},
+	}, 50, map[string]struct{}{"picked": {}})
+	if len(aging) != 1 || aging[0].ID != "old" {
+		t.Fatalf("aging foreshadow = %#v", aging)
+	}
+	if !containsAny("当前章节出现线索", []string{"线", "当前"}) || containsAny("abc", []string{"a"}) {
+		t.Fatal("containsAny mismatch")
+	}
+	if !matchesRecallTerms("失踪案调查线索", []string{"调查"}) || matchesRecallTerms("a", []string{"a"}) || hasMeaningfulOverlap("short", "tiny") {
+		t.Fatal("recall matching mismatch")
+	}
+}
+
+func TestContextLoadingSummaryIncludesAllSignals(t *testing.T) {
+	result := map[string]any{
+		"working_memory": map[string]any{
+			"volume_summaries": []domain.VolumeSummary{{}}, "arc_summaries": []domain.ArcSummary{{}},
+			"recent_summaries": []domain.ChapterSummary{{}}, "timeline": []domain.TimelineEvent{{}}, "previous_tail": "tail",
+			"simulation_profile": true,
+		},
+		"episodic_memory": map[string]any{
+			"planning_tier": domain.PlanningTierLong, "position": map[string]any{"volume": 2, "arc": 3},
+			"character_snapshots": []domain.CharacterSnapshot{{}}, "relationship_state": []domain.RelationshipEntry{{}},
+			"recent_state_changes": []domain.StateChange{{}}, "foreshadow_ledger": []domain.ForeshadowEntry{{}},
+			"related_chapters": []domain.RelatedChapter{{}},
+		},
+		"planning_memory":   map[string]any{"planning_tier": domain.PlanningTierShort, "volume_summaries": []domain.VolumeSummary{{}}, "arc_summaries": []domain.ArcSummary{{}}, "layered_outline": []planningVolumeOutline{{}}},
+		"foundation_memory": map[string]any{"character_snapshots": []domain.CharacterSnapshot{{}}, "characters": []domain.Character{{}}},
+		"reference_pack":    map[string]any{"style_rules": true, "references": map[string]string{"guide": "text"}},
+		"selected_memory":   map[string]any{"story_threads": []domain.RecallItem{{}}, "review_lessons": []domain.RecallItem{{}}},
+		"memory_policy":     true, "_warnings": []string{"warning"}, "_trimmed": []string{"references"},
+	}
+	chapterSummary := buildLoadingSummary(result, 7)
+	for _, want := range []string{"ch=7", "tier=long", "V2A3", "角色:1(快照)", "工作记忆:", "情节记忆:", "规划记忆:", "基础记忆:", "卷摘要:", "弧摘要:", "章摘要:1", "分层大纲:1卷", "时间线:1", "伏笔:1", "关系:1", "状态变化:1", "前章尾部:ok", "风格规则:ok", "相关章:1", "线索召回:1", "评审召回:1", "参考:1项", "参考包:", "记忆策略:ok", "仿写画像:ok", "告警:1", "裁剪:references"} {
+		if !strings.Contains(chapterSummary, want) {
+			t.Errorf("chapter summary missing %q: %s", want, chapterSummary)
+		}
+	}
+	architectSummary := buildLoadingSummary(result, 0)
+	if !strings.Contains(architectSummary, "architect") || !strings.Contains(architectSummary, "tier=short") {
+		t.Fatalf("architect summary = %q", architectSummary)
+	}
+}
+
+func TestContextRelatedChapterLookupUsesAllSignals(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Characters.Save([]domain.Character{{Name: "林砚"}, {Name: "沈曜"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Summaries.SaveSummary(domain.ChapterSummary{Chapter: 20, Characters: []string{"林砚"}}); err != nil {
+		t.Fatal(err)
+	}
+	entry := &domain.OutlineEntry{Chapter: 50, Title: "旧仓库", CoreEvent: "林砚与沈曜追查录音", Scenes: []string{"废弃仓库"}}
+	reads := &contextReads{}
+	tool := newTestContextTool(s, References{}, "default")
+	got := tool.buildRelatedChapters(50, entry,
+		[]domain.ForeshadowEntry{{ID: "tape", Description: "录音带线索", PlantedAt: 10}},
+		[]domain.RelationshipEntry{{CharacterA: "林砚", CharacterB: "沈曜", Chapter: 12, Relation: "合作"}},
+		[]domain.StateChange{{Entity: "林砚", Chapter: 15, Field: "trust", NewValue: "谨慎"}}, reads)
+	if len(got) == 0 || len(got) > 5 {
+		t.Fatalf("related chapters = %#v", got)
+	}
+	if len(reads.warnings) != 0 {
+		t.Fatalf("related chapter warnings = %#v", reads.warnings)
+	}
+	if !containsRecallSummary([]domain.RecallItem{{Summary: got[0].Reason}}, "") {
+		t.Fatal("related chapter reason missing")
+	}
+}
+
+func TestContextOutlineWindowAndLayeredSummaries(t *testing.T) {
+	s := store.NewStore(t.TempDir())
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	volumes := []domain.VolumeOutline{{Index: 1, Arcs: []domain.ArcOutline{
+		{Index: 1, Chapters: []domain.OutlineEntry{{Chapter: 1}, {Chapter: 2}}},
+		{Index: 2, Chapters: []domain.OutlineEntry{{Chapter: 3}, {Chapter: 4}}},
+	}}}
+	if err := s.Outline.SaveLayeredOutline(volumes); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Summaries.SaveVolumeSummary(domain.VolumeSummary{Volume: 1, Summary: "volume"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Summaries.SaveArcSummary(domain.ArcSummary{Volume: 1, Arc: 1, Summary: "arc"}); err != nil {
+		t.Fatal(err)
+	}
+	tool := newTestContextTool(s, References{}, "default")
+	reads := &contextReads{}
+	result := map[string]any{}
+	tool.loadLayeredSummaries(result, 4, 3, reads)
+	if len(result["volume_summaries"].([]domain.VolumeSummary)) != 1 || len(result["arc_summaries"].([]domain.ArcSummary)) != 1 {
+		t.Fatalf("layered summaries = %#v", result)
+	}
+	state := contextBuildState{chapter: 4, profile: domain.ContextProfile{Layered: true}, outline: domain.FlattenOutline(volumes)}
+	working := map[string]any{}
+	tool.buildOutlineWindow(working, state, reads)
+	if len(working["outline_window"].([]domain.OutlineEntry)) == 0 {
+		t.Fatalf("outline window = %#v", working)
+	}
+}
+
 func TestContextToolInjectsRewriteBriefForPendingRewriteChapter(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)

@@ -65,6 +65,16 @@ func TestSummaryStoreRoundTripsAndQueries(t *testing.T) {
 	if got, err := st.Summaries.LoadSummary(2); err != nil || got == nil || got.Title != "Two" {
 		t.Fatalf("summary = %+v, %v", got, err)
 	}
+	if got, err := st.Summaries.LoadSummaryTitle(2); err != nil || got != "Two" {
+		t.Fatalf("cached summary title = %q/%v", got, err)
+	}
+	st.Summaries.titleCache = make(map[int]string)
+	if got, err := st.Summaries.LoadSummaryTitle(3); err != nil || got != "Three" {
+		t.Fatalf("loaded summary title = %q/%v", got, err)
+	}
+	if got, err := st.Summaries.LoadSummaryTitle(99); err != nil || got != "" {
+		t.Fatalf("missing summary title = %q/%v", got, err)
+	}
 	if got, err := st.Summaries.LoadRecentSummaries(4, 3); err != nil || len(got) != 3 {
 		t.Fatalf("recent summaries = %+v, %v", got, err)
 	}

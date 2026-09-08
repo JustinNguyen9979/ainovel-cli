@@ -107,3 +107,48 @@ func TestOverrideVoice_SharesAssemblyPath(t *testing.T) {
 		t.Fatal("voice override broke writer prompt assembly")
 	}
 }
+
+func TestOverridePromptWrapsSupportedRoles(t *testing.T) {
+	b := Load("default", LoadOptions{})
+	for _, file := range []string{"architect-short.md", "architect-long.md", "writer.md", "editor.md"} {
+		if err := b.OverridePrompt(file, "custom prompt"); err != nil {
+			t.Fatalf("OverridePrompt(%s): %v", file, err)
+		}
+	}
+	if !strings.Contains(b.Prompts.Writer, "custom prompt") || !strings.Contains(b.Prompts.Writer, "仿写画像") {
+		t.Fatal("writer override missing wrapped guidance")
+	}
+	if err := b.OverridePrompt("unsupported.md", "custom"); err == nil {
+		t.Fatal("unsupported prompt should fail")
+	}
+}
+
+func TestDefaultLoadOptionsUsesOutputDirectory(t *testing.T) {
+	opts := DefaultLoadOptions("/tmp/book")
+	if opts.BookStyleDir != filepath.Join("/tmp/book", "style") || opts.HomeStyleDir == "" {
+		t.Fatalf("default load options = %+v", opts)
+	}
+}
+
+func TestBuildWriterPromptWithoutStyleLeavesNoExtraSection(t *testing.T) {
+	if got := BuildWriterPrompt("before {{VOICE}} after", "voice", ""); got != "before voice after" {
+		t.Fatalf("writer prompt without style = %q", got)
+	}
+}
+
+func TestReadOverrideMissingAndEmpty(t *testing.T) {
+	if readOverride("", "voice.md") != "" || readOverride(filepath.Join(t.TempDir(), "missing"), "voice.md") != "" {
+		t.Fatal("missing override should be empty")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "voice.md"), "  \n")
+	if got := readOverride(dir, "voice.md"); got != "" {
+		t.Fatalf("blank override = %q", got)
+	}
+}
+
+func TestWithSimulationGuidanceReplacesRole(t *testing.T) {
+	if got := WithSimulationGuidance("base", "writer"); !strings.Contains(got, "writer") || !strings.Contains(got, "base") {
+		t.Fatalf("simulation guidance = %q", got)
+	}
+}

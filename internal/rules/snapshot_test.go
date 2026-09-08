@@ -95,3 +95,33 @@ func TestSystemDefaults_MatchesLegacyDefaultMD(t *testing.T) {
 		t.Fatalf("默认疲劳词应为 16 条，得到 %d", len(d.FatigueWords))
 	}
 }
+
+func TestOverlaySnapshotCopiesAndOverrides(t *testing.T) {
+	base := BuildSnapshot([]Candidate{{Source: "base", Structured: Structured{Genre: "old", FatigueWords: map[string]int{"word": 1}}, Preferences: "base"}})
+	out := OverlaySnapshot(base, Candidate{Source: "runtime", Structured: Structured{Genre: "new", ForbiddenChars: []string{"x"}, FatigueWords: map[string]int{"word": 2}}, Preferences: "next", Uncertain: []string{"uncertain"}, Degraded: true})
+	if out.Version != SnapshotVersion || out.Status != StatusDegraded || out.Structured.Genre != "new" || out.Structured.FatigueWords["word"] != 2 {
+		t.Fatalf("overlay = %+v", out)
+	}
+	if !strings.Contains(out.Preferences, "runtime") || len(out.Sources) != 2 || len(out.Uncertain) != 1 {
+		t.Fatalf("overlay metadata = %+v", out)
+	}
+	out.Structured.FatigueWords["word"] = 99
+	if base.Structured.FatigueWords["word"] != 1 {
+		t.Fatal("overlay must not mutate base fatigue map")
+	}
+	payload := out.Payload()
+	if _, ok := payload["structured"]; !ok {
+		t.Fatal("payload missing structured")
+	}
+	if _, ok := payload["preferences"]; !ok {
+		t.Fatal("payload missing preferences")
+	}
+}
+
+func TestOverlaySnapshotWithoutValuesPreservesBase(t *testing.T) {
+	base := BuildSnapshot([]Candidate{{Structured: Structured{ForbiddenPhrases: []string{"keep"}}, Preferences: "base"}})
+	out := OverlaySnapshot(base, Candidate{})
+	if out.Structured.ForbiddenPhrases[0] != "keep" || out.Preferences != "base" {
+		t.Fatalf("empty overlay changed base: %+v", out)
+	}
+}

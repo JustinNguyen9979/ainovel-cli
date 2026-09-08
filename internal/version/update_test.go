@@ -12,6 +12,28 @@ import (
 	"testing"
 )
 
+func TestUpdateValidatesInputsAndCurrentVersion(t *testing.T) {
+	if _, err := Update(context.Background(), UpdateOptions{}); err == nil {
+		t.Fatal("missing repo should fail")
+	}
+	if _, err := Update(context.Background(), UpdateOptions{Repo: "owner/repo"}); err == nil {
+		t.Fatal("missing binary should fail")
+	}
+	client := &http.Client{Transport: checkRoundTrip(func(*http.Request) (*http.Response, error) {
+		return checkHTTPResponse(http.StatusOK, `{"tag_name":"v1.2.3"}`), nil
+	})}
+	result, err := Update(context.Background(), UpdateOptions{Repo: "owner/repo", BinaryName: "ainovel-cli", CurrentVersion: "1.2.3", Client: client})
+	if err != nil || result == nil || result.Updated || result.Version != "v1.2.3" || result.Path == "" {
+		t.Fatalf("unchanged update = %+v/%v", result, err)
+	}
+	badClient := &http.Client{Transport: checkRoundTrip(func(*http.Request) (*http.Response, error) {
+		return checkHTTPResponse(http.StatusOK, `{}`), nil
+	})}
+	if _, err := Update(context.Background(), UpdateOptions{Repo: "owner/repo", BinaryName: "ainovel-cli", Client: badClient}); err == nil {
+		t.Fatal("release without tag should fail")
+	}
+}
+
 func TestReleaseURL(t *testing.T) {
 	cases := map[string]string{
 		"":       "https://api.github.com/repos/JustinNguyen9979/ainovel-cli/releases/latest",

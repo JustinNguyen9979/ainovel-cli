@@ -1567,6 +1567,58 @@ func TestCommitChapterFinaleSkeletonArcBlocksCompletion(t *testing.T) {
 
 // TestCommitChapterLayeredNoAutoCompleteWithOpenThreads 验证保守性：仍有活跃长线时
 // 即使章节写满也不自动完结，把"是否继续"的裁定权留给架构师。
+func TestCommitChapterSkipResultAndCompletionHelpers(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.Init(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Drafts.SaveDraft(1, "第一章正文"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Drafts.SaveFinalChapter(1, "第一章正文"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.MarkChapterComplete(1, 5, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Progress.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := newTestCommitChapterTool(s)
+	raw, err := tool.buildSkipResult(1, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result domain.CommitResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Committed || result.WordCount != 5 || result.NextChapter != 2 {
+		t.Fatalf("skip result = %+v", result)
+	}
+	if complete, err := tool.applyCompletion(&result, p); err != nil || complete {
+		t.Fatalf("incomplete book completion = %v/%v", complete, err)
+	}
+	if err := s.Progress.MarkChapterComplete(2, 5, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = s.Progress.Load()
+	if complete, err := tool.applyCompletion(&domain.CommitResult{NextChapter: 3}, p); err != nil || !complete {
+		t.Fatalf("complete book completion = %v/%v", complete, err)
+	}
+	if p, _ = s.Progress.Load(); p.Phase != domain.PhaseComplete {
+		t.Fatalf("phase after completion = %s", p.Phase)
+	}
+}
+
 func TestCommitChapterLayeredNoAutoCompleteWithOpenThreads(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)

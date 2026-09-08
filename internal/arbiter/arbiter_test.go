@@ -51,6 +51,15 @@ func (m *scriptedModel) Generate(_ context.Context, messages []agentcore.Message
 	}}, nil
 }
 
+func TestInterventionFactsQueueHead(t *testing.T) {
+	if got := (InterventionFacts{}).QueueHead(); got != 0 {
+		t.Fatalf("empty queue head = %d", got)
+	}
+	if got := (InterventionFacts{PendingRewrites: []int{4, 5}}).QueueHead(); got != 4 {
+		t.Fatalf("queue head = %d", got)
+	}
+}
+
 func TestDecidePlanStartDoesNotSendThinkingToChatModel(t *testing.T) {
 	m := &scriptedModel{outputs: []string{
 		`{"planner":"architect_short","task":"规划短篇","reason":"篇幅较短"}`,
