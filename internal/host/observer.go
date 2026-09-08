@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	storepkg "github.com/JustinNguyen9979/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
 // errorKind classifies a runtime error into a stable, short label for log

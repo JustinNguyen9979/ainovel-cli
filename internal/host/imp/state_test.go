@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 )
 
 func mustLoadState(t *testing.T, w *Workspace) Facts {
@@ -17,6 +18,81 @@ func mustLoadState(t *testing.T, w *Workspace) Facts {
 		t.Fatalf("LoadState: %v", err)
 	}
 	return f
+}
+
+func resumeFixture(t *testing.T) (*store.Store, *Workspace, []byte, *Segmentation, []ImportedChapterFacts) {
+	t.Helper()
+	dir := t.TempDir()
+	st := store.NewStore(dir)
+	if err := st.Init(); err != nil {
+		t.Fatal(err)
+	}
+	srcPath := filepath.Join(dir, "book.txt")
+	if err := os.WriteFile(srcPath, []byte("第一章\n正文\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws, _, err := Ingest(dir, srcPath, Intent{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	norm, err := ws.LoadSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seg := &Segmentation{Chapters: []ChapterSpan{{Number: 1, Title: "第一章", Start: 0, End: len(norm)}}}
+	segDigest := segmentInputDigest(Digest(norm), "", segmentPromptVersion)
+	if err := writeArtifact(ws, fileSegmentation, segDigest, *seg); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := ws.readBytes(fileSegmentation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeArtifact(ws, fileConfirmation, Digest(raw), Confirmation{Method: confirmMethodAuto, Chapters: 1}); err != nil {
+		t.Fatal(err)
+	}
+	facts := []ImportedChapterFacts{{
+		Chapter: 1, Title: "第一章", Summary: "摘要", CoreEvent: "核心事件",
+		HookType: "mystery", DominantStrand: "quest",
+	}}
+	return st, ws, norm, seg, facts
+}
+
+func writeResumeAnalysis(t *testing.T, ws *Workspace, norm []byte, seg *Segmentation, facts []ImportedChapterFacts) {
+	t.Helper()
+	for i, f := range facts {
+		digest := chapterInputDigest(segDigestForResume(norm), analyzePromptVersion, seg, norm, i)
+		if err := writeArtifact(ws, analysisPath(i+1), digest, ChapterAnalysisPayload{Facts: f}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func segDigestForResume(norm []byte) string {
+	return segmentInputDigest(Digest(norm), "", segmentPromptVersion)
+}
+
+func writeResumeSynthesis(t *testing.T, ws *Workspace, facts []ImportedChapterFacts, status string) {
+	t.Helper()
+	if err := writeArtifact(ws, fileSynthesis, synthesisInputDigest(facts), BookSynthesis{StoryStatus: status}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func markResumePublished(t *testing.T, st *store.Store) {
+	t.Helper()
+	if err := st.Book.Save(domain.BookMetadata{Title: "测试书", Synopsis: "测试简介"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Outline.SavePremise("前提"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Outline.SaveOutline([]domain.OutlineEntry{{Chapter: 1, Title: "第一章"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Progress.Save(&domain.Progress{CompletedChapters: []int{1}}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestNextActionChain(t *testing.T) {
@@ -160,7 +236,7 @@ func TestResumeSummary(t *testing.T) {
 	if err := st.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if got := ResumeSummary(st); got != "" {
+	if got := ResumeSummary(st, utils.LanguageZH); got != "" {
 		t.Fatalf("无导入工作区应返回空串，得 %q", got)
 	}
 	src := filepath.Join(dir, "book.txt")
@@ -171,7 +247,7 @@ func TestResumeSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	if got := ResumeSummary(st); !strings.Contains(got, "尚未完成切分") {
+	if got := ResumeSummary(st, utils.LanguageZH); !strings.Contains(got, "尚未完成切分") {
 		t.Fatalf("刚建区应提示未完成切分，得 %q", got)
 	}
 	// 切分+确认就绪、分析 0/1 → 提示分析进度。
@@ -184,7 +260,7 @@ func TestResumeSummary(t *testing.T) {
 	if err := writeArtifact(ws, fileConfirmation, Digest(raw), Confirmation{Method: confirmMethodAuto, Chapters: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if got := ResumeSummary(st); !strings.Contains(got, "已分析 0/1 章") {
+	if got := ResumeSummary(st, utils.LanguageZH); !strings.Contains(got, "已分析 0/1 章") {
 		t.Fatalf("应提示分析进度，得 %q", got)
 	}
 }
@@ -192,6 +268,122 @@ func TestResumeSummary(t *testing.T) {
 // TestResumeStatusPublishedIsTerminal 守护发布终态（实测事故）：书已全量发布后，
 // segmentPromptVersion 升级使工作区切分工件失鲜，ResumeStatus 不得据此把书判回
 // "导入半路"——否则 startEngine 跨重启门禁会永久拒启已发布书的续写。
+func TestResumeSummaryReportsEveryPendingStage(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, st *store.Store, ws *Workspace, norm []byte, seg *Segmentation, facts []ImportedChapterFacts)
+		want  string
+	}{
+		{
+			name: "await confirmation",
+			setup: func(t *testing.T, _ *store.Store, ws *Workspace, _ []byte, _ *Segmentation, _ []ImportedChapterFacts) {
+				if err := os.Remove(ws.path(fileConfirmation)); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "已切分 1 章，等待核对确认",
+		},
+		{
+			name: "synthesis",
+			setup: func(t *testing.T, _ *store.Store, ws *Workspace, norm []byte, seg *Segmentation, facts []ImportedChapterFacts) {
+				writeResumeAnalysis(t, ws, norm, seg, facts)
+			},
+			want: "逐章分析完成，待全书综合",
+		},
+		{
+			name: "story resolution",
+			setup: func(t *testing.T, _ *store.Store, ws *Workspace, norm []byte, seg *Segmentation, facts []ImportedChapterFacts) {
+				writeResumeAnalysis(t, ws, norm, seg, facts)
+				writeResumeSynthesis(t, ws, facts, storyUncertain)
+			},
+			want: "待明确故事状态（--story=open|closed）",
+		},
+		{
+			name: "publish",
+			setup: func(t *testing.T, _ *store.Store, ws *Workspace, norm []byte, seg *Segmentation, facts []ImportedChapterFacts) {
+				writeResumeAnalysis(t, ws, norm, seg, facts)
+				writeResumeSynthesis(t, ws, facts, storyClosed)
+			},
+			want: "综合完成，待发布正式状态",
+		},
+		{
+			name: "done",
+			setup: func(t *testing.T, st *store.Store, ws *Workspace, norm []byte, seg *Segmentation, facts []ImportedChapterFacts) {
+				writeResumeAnalysis(t, ws, norm, seg, facts)
+				writeResumeSynthesis(t, ws, facts, storyClosed)
+				markResumePublished(t, st)
+			},
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, ws, norm, seg, facts := resumeFixture(t)
+			tc.setup(t, st, ws, norm, seg, facts)
+			got := ResumeSummary(st, utils.LanguageZH)
+			if tc.want == "" {
+				if got != "" {
+					t.Fatalf("完成导入应不提示恢复，得 %q", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("ResumeSummary=%q, want substring %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResumeSummaryReportsReadError(t *testing.T) {
+	st, ws, _, _, _ := resumeFixture(t)
+	if err := ws.writeAtomic(fileSegmentation, []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	got := ResumeSummary(st, utils.LanguageZH)
+	if !strings.Contains(got, "发现导入状态读取异常：") || !strings.Contains(got, "请运行 /import 查看并修复") {
+		t.Fatalf("损坏工件应产生修复提示，得 %q", got)
+	}
+}
+
+func TestResolveStoryStatusPersistsExplicitChoice(t *testing.T) {
+	ws := OpenWorkspace(t.TempDir())
+	if err := os.MkdirAll(ws.dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.writeJSON(fileIntent, Intent{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeArtifact(ws, fileSynthesis, "facts", BookSynthesis{StoryStatus: storyUncertain}); err != nil {
+		t.Fatal(err)
+	}
+	r := &runner{ws: ws, opts: Options{StoryResolution: storyOpen}, events: make(chan Event, 4)}
+	if !r.resolveStoryStatus() {
+		t.Fatal("explicit story choice should resolve")
+	}
+	art, err := readArtifact[StoryResolution](ws, fileStoryResolve)
+	if err != nil || art.Payload.Choice != storyOpen {
+		t.Fatalf("story resolution artifact = %+v/%v", art, err)
+	}
+
+	ws2 := OpenWorkspace(t.TempDir())
+	if err := os.MkdirAll(ws2.dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeArtifact(ws2, fileSynthesis, "facts", BookSynthesis{StoryStatus: storyUncertain}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws2.writeJSON(fileIntent, Intent{}); err != nil {
+		t.Fatal(err)
+	}
+	r2 := &runner{ws: ws2, events: make(chan Event, 4)}
+	if r2.resolveStoryStatus() {
+		t.Fatal("missing choice should wait")
+	}
+	if len(r2.events) == 0 || (<-r2.events).Stage != StageAwaitingStoryStatus {
+		t.Fatal("missing choice should emit awaiting status")
+	}
+}
+
 func TestResumeStatusPublishedIsTerminal(t *testing.T) {
 	dir := t.TempDir()
 	st := store.NewStore(dir)

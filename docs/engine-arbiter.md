@@ -1,8 +1,8 @@
 # 控制面演进:Engine + Arbiter(移除 Coordinator 长循环)
 
-> 状态(2026-07-14 v6):**代码实现完成**——Engine/Arbiter 已实施,Coordinator 及全部配套已删除(§十清单);端到端验证写完整书、失败裁定、僵局裁定、返工验收(hold+editor 时序)、boundary hold 即停、退出竞态干预保全与单许可单章节。三轮外部评审的阻断项全部处置(含 feedback 事实闭环、PendingSteer 崩溃保护、lifecycle 竞态)。
-> **文档迁移已完成(2026-07-12)**:architecture.md 正文已全量重写为 Engine+Arbiter 现行架构(含新验证策略/目录/纪律);README、context-management、evaluation-system、observability、user-rules-runtime 的旧架构叙事已清理(仅保留标注的历史对照)。Coordinator 配置与会话兼容路径均已删除；Arbiter 当前刻意统一使用 Default 模型，不开放独立角色配置。
-> **设计语义澄清(第四/五轮评审)**:① writer feedback 的消费点**就是**下一次结构操作(expand_arc/append_volume/update_compass 经 novel_context 参考后清空)——它是"对后续大纲的建议"(commit schema 原文),不是即时调度信号;弧中途的严重偏离走 editor 评审与用户干预通道。非分层书无结构操作,**commit 不落盘其 feedback**(避免永久无消费者的垃圾事实;返回值镜像保留供诊断)。② rule_violations 已闭环:commit 双路径落盘(**best-effort 质量元数据**,与章节提交非同级强一致——恰在 pending_commit 清除后崩溃会缺一条记录,可接受)→ novel_context(chapter=N) 注入 → editor 按 §机械检查映射消费。③ PendingSteer 崩溃保护是 **best-effort 单在途持久化**:首次持久化失败会显式停止裁定；裁定期、动作应用失败、正常退出/Abort 受保护;两个明确不保证的窗口——(a) 派单转入内存执行队列(e.next)后、worker 启动前的硬杀进程(毫秒级窗口,defer 不执行);(b) interMu 等待中的并发干预(尚未写入槽位)。用户在场可感知,重发成本秒级,不为此建持久化 intent/FIFO。④ 启动裁定失败不是死局(2026-07-12 真实故障补课:provider 账号失效致 plan_start 失败,恢复路径全部走不通):StartPrompt(输入事实)改为在裁定**之前**落盘;plan_start 从未完成时,引擎 planStartFallback 依据它现场补裁——首次裁定的重试不违反"恢复不重做已有裁定";补裁失败显式暂停回显,失败裁定的审计记录带 error 字段(DecisionRecord.Error)。
+> 状态(2026-07-12 v5):**代码实现完成**——Engine/Arbiter 已实施,Coordinator 及全部配套已删除(§十清单);端到端验证六条路径:写完整书 / 失败裁定 / 僵局裁定 / 返工验收(pause+editor 时序)/ pause-only 即停 / 退出竞态干预保全(internal/host/engine_test.go)。三轮外部评审的阻断项全部处置(含 feedback 事实闭环、PendingSteer 崩溃保护、lifecycle 竞态)。
+> **文档迁移已完成(2026-07-12)**:architecture.md 正文已全量重写为 Engine+Arbiter 现行架构(含新验证策略/目录/纪律);README、context-management、evaluation-system、observability、user-rules-runtime 的旧架构叙事已清理(仅保留标注的历史对照)。**剩余未完成**:bootstrap 仍静默接受 coordinator 角色配置(存量兼容,不再宣传);arbiter 独立角色配置未实现(固定 Default,过渡限制)。
+> **设计语义澄清(第四/五轮评审)**:① writer feedback 的消费点**就是**下一次结构操作(expand_arc/append_volume/update_compass 经 novel_context 参考后清空)——它是"对后续大纲的建议"(commit schema 原文),不是即时调度信号;弧中途的严重偏离走 editor 评审与用户干预通道。非分层书无结构操作,**commit 不落盘其 feedback**(避免永久无消费者的垃圾事实;返回值镜像保留供诊断)。② rule_violations 已闭环:commit 双路径落盘(**best-effort 质量元数据**,与章节提交非同级强一致——恰在 pending_commit 清除后崩溃会缺一条记录,可接受)→ novel_context(chapter=N) 注入 → editor 按 §机械检查映射消费。③ PendingSteer 崩溃保护是 **best-effort 单在途持久化**:裁定期、动作应用失败、正常退出/Abort 全程受保护;两个明确不保证的窗口——(a) 派单转入内存执行队列(e.next)后、worker 启动前的硬杀进程(毫秒级窗口,defer 不执行);(b) interMu 等待中的并发干预(尚未写入槽位)。用户在场可感知,重发成本秒级,不为此建持久化 intent/FIFO。④ 启动裁定失败不是死局(2026-07-12 真实故障补课:provider 账号失效致 plan_start 失败,恢复路径全部走不通):StartPrompt(输入事实)改为在裁定**之前**落盘;plan_start 从未完成时,引擎 planStartFallback 依据它现场补裁——首次裁定的重试不违反"恢复不重做已有裁定";补裁失败显式暂停回显,失败裁定的审计记录带 error 字段(DecisionRecord.Error)。
 > 本文档保留为设计决策记录;当前架构见 README 架构节与 docs/engine-rfc.md。关联:docs/voice-layer.md(已实施)。
 
 ## 一、动机:被打补丁包围的过时假设
@@ -53,7 +53,7 @@ Tools → Store(唯一事实源)
 | `plan_start` | 新书启动 | 选 short/long 规划师 + 扩充过短需求 |
 | `intervention` | 用户干预 | 查询 / 长效规则 / 剧情结构调整 / 已写返工 / 完本后返工或拒绝 |
 | `worker_failure` | Worker 报错**且确定性分类无出路** | 网络/参数/前置工件缺失等由确定性代码先分类,不送 Arbiter |
-| `deadlock` | 上一轮后仍产生同一路由指令 | 计数与终止语义见 §八 必答题 5 |
+| `deadlock` | 同一路由多次执行而 checkpoint 无推进 | 计数与终止语义见 §八 必答题 5 |
 | `completion_dispute` | **候补,有证据再加** | 卷末完结判定已由 Route 派 architect(分支 10)承担;仅"结构未到边界但故事该收"的中途分歧才需要,真实发生率未知,不预建 |
 
 完本总结不是裁定,是生成任务——由 Engine 直接派 editor 或一次普通 LLM 调用完成,不占 Arbiter 场景。
@@ -78,7 +78,7 @@ type PlanStartDecision struct {
 type InterventionDecision struct {
     Answer   string
     Rules    string
-    Hold     *AdvanceHoldOp
+    Pause    *PauseOp
     Reopen   *ReopenOp
     Dispatch *DispatchDecision
     Reason   string
@@ -97,13 +97,13 @@ type FailureDecision struct {
 
 ```go
 func CollectInterventionFacts(st *store.Store) InterventionFacts        // IO 边界,同 flow.LoadState 纪律
-func DecideIntervention(ctx, model, facts, text) (InterventionDecision, error) // 除统一执行器管理的模型请求外无 IO,可离线重放
+func DecideIntervention(ctx, model, facts, text) (InterventionDecision, error) // 除一次 LLM 调用外无 IO,可离线重放
 // 其余场景同形一对;Collect/Decide 形状统一,不建通用 Question/Decision 框架
 ```
 
-- **失败路径**:统一结构化执行器按模型能力选择原生 JSON Schema 或提示词契约；提示词模式的格式/Schema 错误与两种模式的业务校验错误会携带精确原因交给模型修正，生命周期仅由 `context` 控制。原生契约违约、拒答、截断、错误终止及不可重试请求错误立即显式返回；干预不产生写入，启动显式报错，failure/deadlock 保守暂停
+- **降级路径**:JSON 解析失败带错误重问一次;再失败——干预回显"未能理解"不产生写入,启动显式报错,failure/deadlock 按确定性兜底(终止并告警)
 - **干预记忆**:decisions.jsonl 兼任干预历史,`CollectInterventionFacts` 纳入最近 N 条裁定摘要
-- **模型**:Arbiter 统一使用 Default，不暴露独立 role；只在出现明确的能力或成本需求时再扩展配置契约
+- **模型**:v1 固定 Default(过渡限制——config 与 /model 白名单目前仅四角色);arbiter 转正式 role(白名单/failover/thinking)列为 RFC 前置小任务
 
 ### 4.3 审计(小而稳定;审计≠恢复源)
 
@@ -122,10 +122,10 @@ func DecideIntervention(ctx, model, facts, text) (InterventionDecision, error) /
 
 ```
 读事实 → Route / Arbiter 产出决定 → 核对前置条件 → 执行动作
-       → Worker 运行 → 重算 Route 后置条件 → 下一轮
+       → Worker 运行 → 检查 checkpoint 推进 → 下一轮
 ```
 
-- **不变量:控制状态只在 Engine 边界串行变更。**干预可在 Worker 运行期间并行咨询(只读安全、用户秒级看到 Answer/Reason 回显),但**改控制态的动作(hold/reopen/dispatch)进 Engine 队列,边界核对后提交**;answer(无状态)与 rules(内容平面,本章旧规则下章生效即语义)即时执行
+- **不变量:控制状态只在 Engine 边界串行变更。**干预可在 Worker 运行期间并行咨询(只读安全、用户秒级看到 Answer/Reason 回显),但**改控制态的动作(pause/reopen/dispatch)进 Engine 队列,边界核对后提交**;answer(无状态)与 rules(内容平面,本章旧规则下章生效即语义)即时执行
 - 每个 Dispatch 携带 Collect 时刻快照,边界对账,不符 → 丢弃、记 `decision_stale`、以新事实重询:
 
 ```go
@@ -142,7 +142,7 @@ type DispatchExpect struct {
 ## 六、恢复模型(只恢复事实,不恢复会话)
 
 ```
-启动 → 读 Progress → 读最新 Checkpoint → 查 PendingSteer/AdvanceHold/章节许可 → Gate 对账 → Route → 继续运行 Worker
+启动 → 读 Progress → 读最新 Checkpoint → 查 PendingSteer/PausePoint → Route → 继续运行 Worker
 ```
 
 plan_start 的恢复依赖单一持久化事实(RunMeta 内),**裁定先落事实、再起执行**:
@@ -168,7 +168,7 @@ type PlanStartRecord struct {
 | 0 | 无条件项:规划补齐入 Router(穷举规格先行);decisions.jsonl 审计。实现改进:规划师身份从既有 `RunMeta.PlanningTier` 推导,无需新增记录机制 | ✅ 2026-07-12 |
 | 1 | 文风层交付(docs/voice-layer.md) | ✅ 2026-07-12 |
 | 2 | Step 2 RFC 定稿(docs/engine-rfc.md,七道必答题) | ✅ 2026-07-12 |
-| 3 | WorkerRunner:以 subagent.Runner 程序化直调,事件经 ctx ToolProgress 中继 | ✅ 2026-07-22 |
+| 3 | WorkerRunner:确认 subagent.Tool 可程序化直调,事件经 ctx ToolProgress 中继 | ✅ 2026-07-12 |
 | 4-5 | Engine 接管全部派发 + Arbiter 四场景接线(plan_start/intervention/failure/deadlock),直连 Engine 执行器(实施中发现 Engine 先行使 steering 过渡管线整个不用建,4/5 合并落地) | ✅ 2026-07-12 |
 | 6 | 删除 Coordinator 及全部配套(§十清单全部执行);端到端集成测试(真实工具写完整书/失败裁定/僵局裁定) | ✅ 2026-07-12 |
 
@@ -178,7 +178,7 @@ type PlanStartRecord struct {
 2. **Engine 生命周期**:启动/暂停/中止/恢复;单 Worker 串行保证;/model 与 thinking 运行时切换
 3. **状态提交协议完整化**:§五 的 Expect 对账全场景化;Gate 拆除后 Engine 前置条件清单
 4. **错误分类学**:确定性分类(retry/reroute/terminal)先行,仅无出路者送 `worker_failure`;与 agentcore 层重试的分层
-5. **僵局协议**:同一 `Agent+Task` 连续重现即说明路由后置条件未满足；Worker 内部中间 checkpoint 不清零；Arbiter 决定 retry 不清零；3 次咨询、5 次硬熔断。
+5. **僵局协议**:同路由几次算僵局;成功返回但无 checkpoint 算几次;Arbiter 决定重试后计数是否清零;Arbiter 连续同一失败决策如何处理;何时终止而非无限咨询(Coordinator 的"不设阈值"依赖其自主性,确定性 Engine 必须有显式协议)
 6. **崩溃语义**:如何判定上一个 Worker 是否已产生有效事实
 7. **原型验收**:Observer/Usage/Context/模型切换/恢复五项与现状逐位对照
 

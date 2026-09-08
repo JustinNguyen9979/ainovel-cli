@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -10,19 +11,20 @@ import (
 
 type helpState struct {
 	viewport viewport.Model
+	language utils.Language
 }
 
-func newHelpState(width, height int) *helpState {
+func newHelpState(width, height int, languages ...utils.Language) *helpState {
 	boxW, boxH := reportModalSize(width, height)
 	contentW := paddedModalContentWidth(boxW)
-	text := renderHelpText(contentW)
+	text := renderHelpText(contentW, languages...)
 
 	vp := viewport.New(contentW, boxH-4)
 	vp.SetContent(text)
-	return &helpState{viewport: vp}
+	return &helpState{viewport: vp, language: resolveLanguage(languages)}
 }
 
-func renderHelpText(width int) string {
+func renderHelpText(width int, languages ...utils.Language) string {
 	titleStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	nameStyle := lipgloss.NewStyle().Foreground(colorAccent2).Bold(true)
 	usageStyle := lipgloss.NewStyle().Foreground(colorMuted)
@@ -30,36 +32,35 @@ func renderHelpText(width int) string {
 	hintStyle := lipgloss.NewStyle().Foreground(colorDim)
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("TRỢ GIÚP CÁC LỆNH HỆ THỐNG"))
+	b.WriteString(titleStyle.Render(tr(languages, utils.MsgCommandHelpTitle)))
 	b.WriteString("\n\n")
 
-	for i, spec := range commandSpecs() {
+	for i, spec := range commandSpecs(languages...) {
 		if i > 0 {
 			b.WriteString("\n")
 		}
 		b.WriteString(nameStyle.Render("/" + spec.Name))
 		if len(spec.Aliases) > 0 {
-			b.WriteString(usageStyle.Render("  alias: /" + strings.Join(spec.Aliases, " /")))
+			b.WriteString(usageStyle.Render("  " + ui(resolveLanguage(languages), "别名: /", "bí danh: /") + strings.Join(spec.Aliases, " /")))
 		}
 		b.WriteString("\n")
-		b.WriteString(usageStyle.Render("Cú pháp: " + spec.Usage))
+		b.WriteString(usageStyle.Render(ui(resolveLanguage(languages), "用法: ", "Cách dùng: ") + spec.Usage))
 		b.WriteString("\n")
 		b.WriteString(descStyle.Render(wrapText(spec.Description, width)))
 		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(titleStyle.Render("PHÍM TẮT TIỆN ÍCH"))
+	b.WriteString(titleStyle.Render(tr(languages, utils.MsgShortcuts)))
 	b.WriteString("\n\n")
-	for _, line := range []string{
-		"• Gõ / để mở bảng gợi ý và tìm kiếm lệnh nhanh",
-		"• Phím ↑↓ để chọn lệnh trong danh sách gợi ý",
-		"• Phím Tab hoặc Enter để chấp nhận hoàn thành lệnh",
-		"• Phím Esc để đóng bảng lệnh / modal hiện tại",
-		"• Phím Tab ở màn hình chính: Chuyển đổi giữa chế độ Nhanh và Đồng sáng tác",
-		"• Ctrl+R: Bật/tắt chế độ chọn sao chép văn bản (tắt báo chuột để bôi đen copy, nhấn lại để khôi phục)",
-		"• Ctrl+C (2 lần): Lưu an toàn toàn bộ tiến độ và thoát ứng dụng",
-	} {
+	lines := []string{
+		tr(languages, utils.MsgCommandSearchHint),
+		"↑↓ " + tr(languages, utils.MsgScroll),
+		tr(languages, utils.MsgCommandAcceptHint),
+		tr(languages, utils.MsgCommandCloseHint),
+		ui(resolveLanguage(languages), "Ctrl+R 切换选中复制模式（关闭鼠标上报后可拖拽复制，再按一次恢复）", "Ctrl+R bật/tắt chế độ chọn để sao chép (tắt báo chuột để kéo chọn, nhấn lần nữa để khôi phục)"),
+	}
+	for _, line := range lines {
 		b.WriteString(hintStyle.Render(line))
 		b.WriteString("\n")
 	}
@@ -84,8 +85,8 @@ func renderHelpModal(width, height int, state *helpState) string {
 	modal := renderPaddedModalFrame(
 		boxW,
 		boxH,
-		"Hướng Dẫn Lệnh",
-		"  ↑↓ Cuộn · Esc Đóng",
+		tr([]utils.Language{state.language}, utils.MsgCommandHelpTitle),
+		"  ↑↓ "+tr([]utils.Language{state.language}, utils.MsgScroll)+" · "+tr([]utils.Language{state.language}, utils.MsgClose),
 		strings.Split(state.viewport.View(), "\n"),
 	)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)

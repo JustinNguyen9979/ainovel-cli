@@ -8,10 +8,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/errs"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/llmcontract"
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/llm"
-	"github.com/voocel/ainovel-cli/internal/errs"
-	"github.com/voocel/ainovel-cli/internal/llmcontract"
 )
 
 // FailoverEvent 表示一次显式 provider 切换。

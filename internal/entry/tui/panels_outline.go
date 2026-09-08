@@ -5,20 +5,27 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/ainovel-cli/internal/host"
 )
 
+// outlineGridThreshold 大纲切换多列的章节阈值。
+// short tier 上限 25 章，20 以下单列一屏装得下、且能保留"进行中"徽标；
+// 长篇 layered 模式滚动展开后 n 自然会突破 20，平滑切到多列。
 const outlineGridThreshold = 20
 
-func renderOutlineSection(snap host.UISnapshot, contentW int) string {
+// renderOutlineSection 按章节数选布局：少则单列（含"进行中"徽标），多则多列网格。
+func renderOutlineSection(snap host.UISnapshot, contentW int, languages ...utils.Language) string {
 	if len(snap.Outline) < outlineGridThreshold {
-		return renderOutlineList(snap, contentW)
+		return renderOutlineList(snap, contentW, languages...)
 	}
-	return renderOutlineGrid(snap, contentW)
+	return renderOutlineGrid(snap, contentW, languages...)
 }
 
-func renderOutlineList(snap host.UISnapshot, contentW int) string {
+// renderOutlineList 单列章节列表（短篇用）。每行尾部带"进行中"徽标，垂直阅读节奏更接近目录。
+func renderOutlineList(snap host.UISnapshot, contentW int, languages ...utils.Language) string {
+	lang := resolveLanguage(languages)
 	var b strings.Builder
 	for _, e := range snap.Outline {
 		ch := fmt.Sprintf("%2d", e.Chapter)
@@ -40,7 +47,7 @@ func renderOutlineList(snap host.UISnapshot, contentW int) string {
 		title := truncate(e.Title, contentW-6)
 		line := marker + chStyle + " " + titleStyle.Render(title)
 		if snap.InProgressChapter == e.Chapter {
-			line += lipgloss.NewStyle().Foreground(colorAccent).Italic(true).Render(" Đang viết")
+			line += lipgloss.NewStyle().Foreground(colorAccent).Italic(true).Render(" " + ui(lang, "进行中", "đang thực hiện"))
 		}
 		b.WriteString(line)
 		b.WriteString("\n")
@@ -48,7 +55,11 @@ func renderOutlineList(snap host.UISnapshot, contentW int) string {
 	return b.String()
 }
 
-func renderOutlineGrid(snap host.UISnapshot, contentW int) string {
+// renderOutlineGrid 把大纲章节按"列优先"填充为多列网格，避免宽屏单列大量留白。
+// 列数按 contentW 自适应（1-4），列内章节连续递增（"读完一列再读下一列"）。
+// 与单列布局的取舍：放弃尾部" 进行中"徽标——多列下徽标会破坏列对齐，
+// 且 ▸ 标记 + 金色 + 左侧概览栏的"写作中 第 N 章"已经把进行中信息说清楚。
+func renderOutlineGrid(snap host.UISnapshot, contentW int, languages ...utils.Language) string {
 	n := len(snap.Outline)
 	if n == 0 {
 		return ""
@@ -63,12 +74,13 @@ func renderOutlineGrid(snap host.UISnapshot, contentW int) string {
 			titleW = w
 		}
 	}
+	// 标题宽度上限 14（约 7 个汉字）；偶尔出现的长标题截断，避免一两个长标题撑大全体 cell
 	if titleW > 14 {
 		titleW = 14
 	} else if titleW < 4 {
 		titleW = 4
 	}
-	cellW := 3 + chNumW + titleW
+	cellW := 3 + chNumW + titleW // marker(1) + 空格(1) + 章号 + 空格(1) + 标题
 	gutter := 4
 	cols := (contentW + gutter) / (cellW + gutter)
 	if cols < 1 {
@@ -88,6 +100,7 @@ func renderOutlineGrid(snap host.UISnapshot, contentW int) string {
 				break
 			}
 			cell := renderOutlineCell(snap.Outline[idx], snap, chNumW, titleW)
+			// 后续列还有 cell 时按 cellW 补齐 + gutter；否则当前 cell 是行尾不补
 			if c < cols-1 && (c+1)*rows+r < n {
 				b.WriteString(cellStyle.Render(cell))
 				b.WriteString(gutterStr)
@@ -100,6 +113,7 @@ func renderOutlineGrid(snap host.UISnapshot, contentW int) string {
 	return b.String()
 }
 
+// renderOutlineCell 渲染单个章节 cell：完成（绿●）/ 进行中（金▸）/ 未开始（暗○）。
 func renderOutlineCell(e host.OutlineSnapshot, snap host.UISnapshot, chNumW, titleW int) string {
 	chStr := fmt.Sprintf("%*d", chNumW, e.Chapter)
 	title := truncateWidth(e.Title, titleW)
@@ -121,6 +135,8 @@ func renderOutlineCell(e host.OutlineSnapshot, snap host.UISnapshot, chNumW, tit
 	return marker + " " + chRendered + " " + titleRendered
 }
 
+// truncateWidth 按"视觉宽度"截断（中文字符算 2 列），与 lipgloss.Width 同源。
+// 不加省略号，供网格 cell 列对齐和 truncate 共用。
 func truncateWidth(s string, maxW int) string {
 	if lipgloss.Width(s) <= maxW {
 		return s
@@ -138,31 +154,49 @@ func truncateWidth(s string, maxW int) string {
 	return b.String()
 }
 
-func renderDetailContent(snap host.UISnapshot, contentW int) string {
+// renderDetailContent 构建右侧详情面板内容。
+// 优先展示基础设定（大纲、角色），然后是运行时信息（提交、审阅等）。
+func renderDetailContent(snap host.UISnapshot, contentW int, languages ...utils.Language) string {
+	lang := resolveLanguage(languages)
 	var b strings.Builder
 
-	// Đại cương
+	// 大纲
 	if len(snap.Outline) > 0 {
-		outlineHeader := ":: Đại Cương"
+		outlineHeader := ":: " + utils.T(lang, utils.MsgOutline)
 		if snap.Layered {
-			outlineHeader = fmt.Sprintf(":: Đại Cương (%s · Quy hoạch động)", snap.CurrentVolumeArc)
+			if lang == utils.LanguageZH {
+				outlineHeader = fmt.Sprintf(":: 大纲（%s · 动态规划大纲）", localizedVolumeArc(lang, snap.CurrentVolumeArc))
+			} else {
+				outlineHeader = fmt.Sprintf(":: Đại cương (%s · đại cương động)", localizedVolumeArc(lang, snap.CurrentVolumeArc))
+			}
 		}
 		b.WriteString(panelTitleStyle.Render(outlineHeader))
 		b.WriteString("\n")
-		b.WriteString(renderOutlineSection(snap, contentW))
-		
+		b.WriteString(renderOutlineSection(snap, contentW, lang))
+		// 滚动规划提示
 		compassStyle := lipgloss.NewStyle().Foreground(colorDim).Italic(true)
 		if snap.Layered {
 			if snap.NextVolumeTitle != "" {
-				b.WriteString(compassStyle.Render("  ┄ Tập tiếp theo: " + snap.NextVolumeTitle))
+				label := "下一卷："
+				if lang != utils.LanguageZH {
+					label = "Tập tiếp theo: "
+				}
+				b.WriteString(compassStyle.Render("  ┄ " + label + snap.NextVolumeTitle))
 				b.WriteString("\n")
 			}
-			b.WriteString(compassStyle.Render("  ··· Các chương sau sẽ tự động sinh theo tiến độ sáng tác"))
+			continuation := "  ··· 后续章节随创作推进自动生成"
+			if lang != utils.LanguageZH {
+				continuation = "  ··· Các chương tiếp theo sẽ được tạo khi sáng tác tiến triển"
+			}
+			b.WriteString(compassStyle.Render(continuation))
 			b.WriteString("\n")
 			if snap.CompassDirection != "" {
-				direction := fmt.Sprintf("  → Hướng kết cục: %s", snap.CompassDirection)
+				direction := fmt.Sprintf("  → 终局：%s", snap.CompassDirection)
+				if lang != utils.LanguageZH {
+					direction = "  → Kết thúc: " + snap.CompassDirection
+				}
 				if snap.CompassScale != "" {
-					direction += " (" + snap.CompassScale + ")"
+					direction += "（" + snap.CompassScale + "）"
 				}
 				b.WriteString(compassStyle.Render(truncate(direction, contentW)))
 				b.WriteString("\n")
@@ -171,9 +205,9 @@ func renderDetailContent(snap host.UISnapshot, contentW int) string {
 		b.WriteString("\n")
 	}
 
-	// Nhân vật
+	// 角色
 	if len(snap.Characters) > 0 {
-		b.WriteString(panelTitleStyle.Render(":: Nhân Vật"))
+		b.WriteString(panelTitleStyle.Render(":: " + ui(lang, "角色", "Nhân vật")))
 		b.WriteString("\n")
 		for _, c := range snap.Characters {
 			writeBulletWrapped(&b, c, contentW, cardContentStyle)
@@ -181,11 +215,11 @@ func renderDetailContent(snap host.UISnapshot, contentW int) string {
 		b.WriteString("\n")
 	}
 
-	// Nhân vật phụ
+	// 配角生态：累计已出场的次要角色总数 + 最近活跃前 5 名
 	if snap.SupportingCount > 0 {
-		b.WriteString(panelTitleStyle.Render(":: Nhân Vật Phụ"))
+		b.WriteString(panelTitleStyle.Render(":: " + ui(lang, "配角生态", "Hệ sinh thái nhân vật phụ")))
 		b.WriteString("\n")
-		b.WriteString(cardContentStyle.Render(truncate(fmt.Sprintf("Đã xuất hiện: %d nhân vật", snap.SupportingCount), contentW)))
+		b.WriteString(cardContentStyle.Render(truncate(fmt.Sprintf(ui(lang, "已出场：%d 位", "Đã xuất hiện: %d nhân vật"), snap.SupportingCount), contentW)))
 		b.WriteString("\n")
 		for _, name := range snap.RecentSupporting {
 			writeBulletWrapped(&b, name, contentW, cardContentStyle)
@@ -194,7 +228,7 @@ func renderDetailContent(snap host.UISnapshot, contentW int) string {
 	}
 
 	if snap.Synopsis != "" {
-		b.WriteString(panelTitleStyle.Render(":: Giới Thiệu Tóm Tắt"))
+		b.WriteString(panelTitleStyle.Render(":: " + ui(lang, "简介", "Giới thiệu")))
 		b.WriteString("\n")
 		for _, line := range wrapStreamText(snap.Synopsis, contentW) {
 			b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render(line))
@@ -203,9 +237,9 @@ func renderDetailContent(snap host.UISnapshot, contentW int) string {
 		b.WriteString("\n\n")
 	}
 
-	// Tiền đề
+	// 前提
 	if snap.Premise != "" {
-		b.WriteString(panelTitleStyle.Render(":: Tiền Đề Cốt Truyện"))
+		b.WriteString(panelTitleStyle.Render(":: " + ui(lang, "前提", "Tiền đề")))
 		b.WriteString("\n")
 		for _, line := range wrapStreamText(snap.Premise, contentW) {
 			b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render(line))
@@ -215,21 +249,21 @@ func renderDetailContent(snap host.UISnapshot, contentW int) string {
 	}
 
 	if snap.LastCommitSummary != "" {
-		b.WriteString(cardTitleStyle.Render("~ Bản Nộp Mới Nhất ~"))
+		b.WriteString(cardTitleStyle.Render("~ " + ui(lang, "最近提交", "Commit gần nhất") + " ~"))
 		b.WriteString("\n")
 		writeWrapped(&b, snap.LastCommitSummary, contentW, cardContentStyle)
 		b.WriteString("\n")
 	}
 
 	if snap.LastReviewSummary != "" {
-		b.WriteString(cardTitleStyle.Render("~ Thẩm Duyệt Mới Nhất ~"))
+		b.WriteString(cardTitleStyle.Render("~ " + ui(lang, "最近审阅", "Đánh giá gần nhất") + " ~"))
 		b.WriteString("\n")
 		writeWrapped(&b, snap.LastReviewSummary, contentW, cardContentStyle)
 		b.WriteString("\n")
 	}
 
 	if len(snap.RecentSummaries) > 0 {
-		b.WriteString(cardTitleStyle.Render("~ Tóm Tắt Gần Đây ~"))
+		b.WriteString(cardTitleStyle.Render("~ " + ui(lang, "摘要", "Tóm tắt") + " ~"))
 		b.WriteString("\n")
 		for _, s := range snap.RecentSummaries {
 			writeWrapped(&b, s, contentW, cardContentStyle)
@@ -239,6 +273,7 @@ func renderDetailContent(snap host.UISnapshot, contentW int) string {
 	return b.String()
 }
 
+// writeWrapped 按视觉宽度折行写入一段文本，每行独立渲染样式。
 func writeWrapped(b *strings.Builder, text string, contentW int, style lipgloss.Style) {
 	for _, line := range wrapStreamText(text, max(8, contentW)) {
 		b.WriteString(style.Render(line))
@@ -246,9 +281,10 @@ func writeWrapped(b *strings.Builder, text string, contentW int, style lipgloss.
 	}
 }
 
+// writeBulletWrapped 写入一个"· "条目：按视觉宽度折行，续行以两列空格悬挂缩进。
 func writeBulletWrapped(b *strings.Builder, text string, contentW int, style lipgloss.Style) {
 	for i, line := range wrapStreamText(text, max(8, contentW-2)) {
-		prefix := "• "
+		prefix := "· "
 		if i > 0 {
 			prefix = "  "
 		}

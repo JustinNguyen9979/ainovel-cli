@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 )
 
 func TestStartCommandLoadsPromptFile(t *testing.T) {
@@ -56,7 +58,7 @@ func TestEnterStartingSwitchesToWorkbenchImmediately(t *testing.T) {
 	if !m.snapshot.IsRunning {
 		t.Fatal("snapshot should render as running during local startup")
 	}
-	if got := m.textarea.Placeholder; got != "Đang khởi tạo sáng tác..." {
+	if got := m.textarea.Placeholder; got != utils.T(utils.LanguageVI, utils.MsgStartingQuick) {
 		t.Fatalf("placeholder = %q", got)
 	}
 	if len(m.events) != 2 {
@@ -87,7 +89,7 @@ func TestStartupFailureStaysInWorkbench(t *testing.T) {
 	if got.snapshot.IsRunning {
 		t.Fatal("启动失败后 snapshot 不应仍显示运行中")
 	}
-	if !strings.Contains(got.textarea.Placeholder, "gián đoạn") && !strings.Contains(got.textarea.Placeholder, "thất bại") {
+	if !strings.Contains(got.textarea.Placeholder, "Khởi động thất bại") {
 		t.Fatalf("placeholder = %q", got.textarea.Placeholder)
 	}
 	if len(got.events) == 0 || got.events[len(got.events)-1].Category != "ERROR" {

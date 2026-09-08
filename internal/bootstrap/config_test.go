@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/voocel/ainovel-cli/internal/errs"
-	"github.com/voocel/ainovel-cli/internal/notify"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/errs"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/notify"
 )
 
 func TestConfigResolveReasoningEffort(t *testing.T) {
@@ -42,6 +42,17 @@ func TestConfigResolveReasoningEffort(t *testing.T) {
 	}
 	if got := empty.ResolveReasoningEffort("writer"); got != "xhigh" {
 		t.Errorf("空默认下 writer 覆盖应生效，得 %q", got)
+	}
+}
+
+func TestValidateBaseAcceptsCocreateRole(t *testing.T) {
+	cfg := Config{
+		Provider: "openrouter", ModelName: "default-model",
+		Providers: map[string]ProviderConfig{"openrouter": {APIKey: "sk-test-123456"}},
+		Roles:     map[string]RoleConfig{"cocreate": {Provider: "openrouter", Model: "cocreate-model", ReasoningEffort: "medium"}},
+	}
+	if err := cfg.ValidateBase(); err != nil {
+		t.Fatalf("roles.cocreate should be valid: %v", err)
 	}
 }
 

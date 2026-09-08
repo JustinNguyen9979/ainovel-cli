@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
 	"github.com/voocel/agentcore"
 )
 
@@ -115,6 +116,63 @@ func TestValidateBatchRejections(t *testing.T) {
 	}
 	if got.Chapters[0].HookType != "crisis" || got.Chapters[0].DominantStrand != "quest" {
 		t.Fatalf("枚举应归一化为小写落盘：%+v", got.Chapters[0])
+	}
+}
+
+func TestBuildLedgerTracksContinuity(t *testing.T) {
+	if got := buildLedger(nil); got != "" {
+		t.Fatalf("空事实应生成空 ledger，得 %q", got)
+	}
+	got := buildLedger([]ImportedChapterFacts{
+		{
+			Characters: []string{"Zed", "Amy", "Zed"},
+			ForeshadowUpdates: []domain.ForeshadowUpdate{
+				{ID: "alpha", Action: "plant", Description: "初始伏笔"},
+				{ID: "blank", Action: "plant"},
+				{ID: "alpha", Action: "advance", Description: "推进伏笔"},
+				{ID: "blank", Action: "advance"},
+				{ID: "created", Action: "advance"},
+				{ID: "blank", Action: "resolve"},
+				{ID: "unknown", Action: "resolve"},
+				{ID: "ignored", Action: "ignore", Description: "不应进入 ledger"},
+			},
+		},
+		{
+			ForeshadowUpdates: []domain.ForeshadowUpdate{{ID: "alpha", Action: "resolve"}},
+			StateChanges:      []domain.StateChange{{Entity: "Amy", Field: "location", NewValue: "城门"}},
+		},
+	})
+	want := "已知人物：Amy、Zed\n活跃伏笔（复用 ID，勿新造）：\n- created：\n最近状态：Amy.location=城门\n"
+	if got != want {
+		t.Fatalf("ledger 内容不符：\n得：%q\n想要：%q", got, want)
+	}
+}
+
+func TestValidateBatchFieldRejections(t *testing.T) {
+	_, seg := analyzeFixture(t, 1)
+	cases := []struct {
+		name string
+		edit func(*ImportedChapterFacts)
+	}{
+		{"章号不匹配", func(f *ImportedChapterFacts) { f.Chapter = 2 }},
+		{"summary 为空", func(f *ImportedChapterFacts) { f.Summary = "  " }},
+		{"core_event 为空", func(f *ImportedChapterFacts) { f.CoreEvent = "" }},
+		{"dominant_strand 非法", func(f *ImportedChapterFacts) { f.DominantStrand = "bogus" }},
+		{"plant 缺 description", func(f *ImportedChapterFacts) {
+			f.ForeshadowUpdates = []domain.ForeshadowUpdate{{ID: "thread", Action: "plant"}}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var f ImportedChapterFacts
+			if err := json.Unmarshal([]byte(factsJSON(1, seg.Chapters[0].Title)), &f); err != nil {
+				t.Fatal(err)
+			}
+			tc.edit(&f)
+			if err := validateBatch(&AnalysisBatchResult{Chapters: []ImportedChapterFacts{f}}, seg, 0, 1); err == nil {
+				t.Fatalf("%s 应拒绝", tc.name)
+			}
+		})
 	}
 }
 

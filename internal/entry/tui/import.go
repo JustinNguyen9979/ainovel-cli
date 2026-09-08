@@ -10,11 +10,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/host/imp"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host/imp"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 )
 
+// importState 是 /import 命令运行期间的模态状态。
+//
+// 模态在导入开始时创建，跟随事件流推进；完成或出错后保留在屏上等用户 Esc 关闭。
+// Esc 在运行中触发取消（ctx.Cancel），交由 runner 在下一事件点收尾。
 type importState struct {
+	language   utils.Language
 	reqID      int
 	source     string
 	stage      imp.Stage
@@ -23,11 +29,11 @@ type importState struct {
 	startedAt  time.Time
 	finishedAt time.Time
 	history    []importLine
-	totalLines int
+	totalLines int // 累计日志行数（history 达到 importHistoryMax 后仍继续计数）
 	err        error
-	done       bool
-	paused     bool
-	frame      int
+	done       bool // 终态（完成/出错）
+	paused     bool // 管线在 awaiting 处停下、事件通道已关闭：面板可关闭，非终态
+	frame      int  // 主动画同步帧：尾随星标与倒计时靠它逐 tick 重算
 	cancel     context.CancelFunc
 	viewport   viewport.Model
 }
@@ -38,22 +44,26 @@ type importLine struct {
 	current int
 	total   int
 	message string
-	level   string
-	key     string
-	retryAt time.Time
+	level   string    // "warn" 重试/退避警示
+	key     string    // 非空时同 key 连续行原地更新（对齐事件面板 ID 机制）
+	retryAt time.Time // 非零 = 下次重试截止时刻，渲染时算剩余秒数形成倒计时
 	err     error
 
-	rendered  string
+	rendered  string // 按 renderedW 缓存的渲染结果；历史可达千行级，逐 tick 全量重排会卡死面板
 	renderedW int
 }
 
+// importHistoryMax 是面板内存中保留的日志行上限：千章级书逐章回显 + 逐章发布会
+// 无上限增长，既耗内存又拖慢重渲染。日志文件（logs/import.log）始终保有全量转录。
 const importHistoryMax = 1000
 
-func newImportState(reqID int, source string, width, height int, cancel context.CancelFunc) *importState {
+func newImportState(reqID int, source string, width, height int, cancel context.CancelFunc, languages ...utils.Language) *importState {
 	boxW, boxH := reportModalSize(width, height)
+	lang := resolveLanguage(languages)
 	contentW := paddedModalContentWidth(boxW)
 	vp := viewport.New(contentW, boxH-4)
 	s := &importState{
+		language:  lang,
 		reqID:     reqID,
 		source:    source,
 		startedAt: time.Now(),
@@ -76,6 +86,7 @@ func (s *importState) appendEvent(ev imp.Event, contentW int) {
 		at: ev.Time, stage: ev.Stage, current: ev.Current, total: ev.Total,
 		message: ev.Message, level: ev.Level, key: ev.Key, retryAt: ev.RetryAt, err: ev.Err,
 	}
+	// 同 Key 且紧邻 → 原地更新（7 次退避在一行跳动）；被其它进度行隔断则另起一行，保持时间序。
 	if ev.Key != "" && len(s.history) > 0 && s.history[len(s.history)-1].key == ev.Key {
 		s.history[len(s.history)-1] = line
 	} else {
@@ -92,7 +103,27 @@ func (s *importState) appendEvent(ev imp.Event, contentW int) {
 	s.refresh(contentW)
 }
 
+func localizedImportStage(lang utils.Language, stage imp.Stage) string {
+	labels := map[imp.Stage][2]string{
+		imp.StageIngesting:            {"读取中", "Đang đọc"},
+		imp.StageSegmenting:           {"切分中", "Đang phân đoạn"},
+		imp.StageAwaitingConfirmation: {"等待确认", "Chờ xác nhận"},
+		imp.StageAnalyzing:            {"分析中", "Đang phân tích"},
+		imp.StageSynthesizing:         {"综合中", "Đang tổng hợp"},
+		imp.StageAwaitingStoryStatus:  {"等待故事状态", "Chờ trạng thái câu chuyện"},
+		imp.StageValidating:           {"校验中", "Đang kiểm tra"},
+		imp.StagePublishing:           {"发布中", "Đang xuất bản"},
+		imp.StageDone:                 {"完成", "Hoàn tất"},
+		imp.StageError:                {"错误", "Lỗi"},
+	}
+	if pair, ok := labels[stage]; ok {
+		return ui(lang, pair[0], pair[1])
+	}
+	return string(stage)
+}
+
 func (s *importState) refresh(contentW int) {
+	lang := s.language
 	titleStyle := lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
 	mutedStyle := lipgloss.NewStyle().Foreground(colorMuted)
@@ -101,23 +132,23 @@ func (s *importState) refresh(contentW int) {
 	stageStyle := lipgloss.NewStyle().Foreground(colorAccent2)
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("NHẬP TIỂU THUYẾT TỪ BÊN NGOÀI"))
+	b.WriteString(titleStyle.Render(ui(lang, "导入外部小说", "Nhập tiểu thuyết bên ngoài")))
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("Tệp nguồn: "))
+	b.WriteString(dimStyle.Render(ui(lang, "来源 ", "Tệp nguồn ")))
 	b.WriteString(s.source)
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("Bắt đầu: "))
+	b.WriteString(dimStyle.Render(ui(lang, "开始 ", "Bắt đầu ")))
 	b.WriteString(formatReportTime(s.startedAt))
 	if !s.finishedAt.IsZero() {
-		b.WriteString(dimStyle.Render("  Hoàn thành: "))
+		b.WriteString(dimStyle.Render(ui(lang, "  完成 ", "  Hoàn tất ")))
 		b.WriteString(formatReportTime(s.finishedAt))
 	}
 	b.WriteString("\n\n")
 
-	b.WriteString(mutedStyle.Render("Giai đoạn: "))
-	b.WriteString(stageStyle.Render(string(s.stage)))
+	b.WriteString(mutedStyle.Render(ui(lang, "阶段 ", "Giai đoạn ")))
+	b.WriteString(stageStyle.Render(localizedImportStage(lang, s.stage)))
 	if s.total > 0 {
-		b.WriteString(mutedStyle.Render("  Tiến độ: "))
+		b.WriteString(mutedStyle.Render(ui(lang, "  进度 ", "  Tiến độ ")))
 		if s.current > 0 {
 			b.WriteString(fmt.Sprintf("%d/%d", s.current, s.total))
 		} else {
@@ -126,20 +157,25 @@ func (s *importState) refresh(contentW int) {
 	}
 	b.WriteString("\n\n")
 
-	b.WriteString(titleStyle.Render("Nhật ký tiến trình"))
+	// 历史日志。每行一个语义图标列（对齐事件面板形态）：
+	// ✗ 红=失败 · ↻ 橙=退避重试/校验重问（同键原地跳动） · ✓ 绿=完成 · · 灰=普通进度。
+	b.WriteString(titleStyle.Render(ui(lang, "流程日志", "Nhật ký quy trình")))
 	b.WriteString(" ")
 	if s.totalLines > len(s.history) {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("(%d dòng, hiển thị gần nhất %d, xem đầy đủ tại logs/import.log)", s.totalLines, len(s.history))))
+		b.WriteString(dimStyle.Render(fmt.Sprintf(ui(lang, "(%d 条，仅显示最近 %d，全量见 logs/import.log)", "(%d dòng, chỉ hiện %d dòng gần nhất; xem toàn bộ tại logs/import.log)"), s.totalLines, len(s.history))))
 	} else {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("(%d dòng)", s.totalLines)))
+		b.WriteString(dimStyle.Render(fmt.Sprintf(ui(lang, "(%d 条)", "(%d dòng)"), s.totalLines)))
 	}
 	b.WriteString("\n")
 	now := time.Now()
 	for i := range s.history {
 		ln := &s.history[i]
+		// 已定稿行按宽度缓存渲染结果：refresh 每个动画 tick 都跑，千行级历史全量
+		// 重排（wrapText+逐行套色）是平方级开销，publish 阶段会肉眼可见卡顿。
+		// 只有倒计时仍活跃的行需要逐 tick 重算（到点后多算 2s 以清掉徽标）。
 		live := !ln.retryAt.IsZero() && now.Before(ln.retryAt.Add(2*time.Second))
 		if ln.rendered == "" || ln.renderedW != contentW || live {
-			ln.rendered = renderImportLine(*ln, contentW, now)
+			ln.rendered = renderImportLine(*ln, contentW, now, lang)
 			ln.renderedW = contentW
 		}
 		b.WriteString("\n")
@@ -148,33 +184,38 @@ func (s *importState) refresh(contentW int) {
 
 	running := !s.done && !s.paused
 	if running {
+		// 尾随光标：流式面板同款单星跟在最后一条日志下方，随主动画逐帧跳动，
+		// 与顶部"进行中"指示行呼应——日志尾部有它，退避等待期也一眼可见管线还活着。
 		b.WriteString("\n\n")
 		b.WriteString(lipgloss.NewStyle().Foreground(colorAccent).Bold(true).
 			Render(streamCursorFrames[s.frame%len(streamCursorFrames)]))
 	}
 
+	// 收尾提示
 	b.WriteString("\n\n")
 	switch {
 	case s.err != nil:
-		b.WriteString(errStyle.Render("Nhập truyện thất bại"))
+		b.WriteString(errStyle.Render(ui(lang, "导入失败", "Nhập thất bại")))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("Esc Đóng bảng"))
+		b.WriteString(dimStyle.Render(ui(lang, "Esc 关闭面板", "Esc đóng bảng")))
 	case s.paused && s.stage == imp.StageAwaitingConfirmation:
-		b.WriteString(okStyle.Render("Đã phân tách chương xong, chờ bạn kiểm tra"))
+		b.WriteString(okStyle.Render(ui(lang, "切分完成，等待确认", "Đã chia xong, chờ xác nhận")))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("Nhấn 'y' để xác nhận tiếp tục; nếu cần chỉnh phân tách hãy Esc rồi chạy /import --guide=<hướng dẫn>; Esc Đóng bảng"))
+		b.WriteString(dimStyle.Render(ui(lang, "y 确认切分并继续；如需调整可 Esc 后使用 /import --guide=<自然语言说明>；Esc 关闭面板", "y xác nhận và tiếp tục; muốn chỉnh hãy Esc rồi dùng /import --guide=<hướng dẫn>; Esc đóng bảng")))
 	case s.paused:
-		b.WriteString(okStyle.Render("Đã tạm dừng nhập truyện, chờ thao tác của bạn"))
+		b.WriteString(okStyle.Render(ui(lang, "导入已暂停，等待你的操作", "Nhập đã tạm dừng, chờ thao tác của bạn")))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("Làm theo hướng dẫn phía trên (ví dụ /import --story=open|closed); Esc Đóng bảng"))
+		b.WriteString(dimStyle.Render(ui(lang, "按上方提示继续（如 /import --story=open|closed）；Esc 关闭面板", "Làm theo hướng dẫn phía trên (ví dụ /import --story=open|closed); Esc đóng bảng")))
 	case s.done:
-		b.WriteString(okStyle.Render("Nhập truyện hoàn tất, Thiết lập nền tảng và các chương đã sẵn sàng"))
+		b.WriteString(okStyle.Render(ui(lang, "导入完成，基础设定和章节已就绪", "Nhập hoàn tất, thiết lập nền và chương đã sẵn sàng")))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("Esc Đóng bảng và chuyển sang trạng thái viết tiếp (dừng ở ranh giới chờ bạn duyệt)"))
+		b.WriteString(dimStyle.Render(ui(lang, "Esc 关闭面板并接通续写门禁（引擎停在下一章边界，等你验收放行）", "Esc đóng bảng và mở cổng tiếp tục (engine dừng ở ranh giới chương tiếp theo, chờ bạn duyệt)")))
 	default:
-		b.WriteString(dimStyle.Render("Esc Hủy nhập truyện"))
+		b.WriteString(dimStyle.Render(ui(lang, "Esc 取消导入", "Esc hủy nhập")))
 	}
 
+	// 跟尾只在用户位于底部时生效：refresh 现在每 tick 都跑（动画/倒计时），
+	// 无条件 GotoBottom 会把运行中向上翻阅的用户每 350ms 拽回底部。
 	atBottom := s.viewport.AtBottom()
 	s.viewport.SetContent(b.String())
 	if running && atBottom {
@@ -182,7 +223,11 @@ func (s *importState) refresh(contentW int) {
 	}
 }
 
-func renderImportLine(ln importLine, contentW int, now time.Time) string {
+// renderImportLine 渲染一条流程日志行：时间戳 + 语义图标列 + 阶段（+进度）+ 正文。
+// 正文按扣除前缀后的剩余宽度换行，续行对齐正文起点；超宽只换行绝不裁剪——
+// viewport 对超宽行是硬裁，错误里的 HTTP 状态/provider/模型正是排查依据，截掉等于白报错。
+func renderImportLine(ln importLine, contentW int, now time.Time, languages ...utils.Language) string {
+	lang := resolveLanguage(languages)
 	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
 	mutedStyle := lipgloss.NewStyle().Foreground(colorMuted)
 	okStyle := lipgloss.NewStyle().Foreground(colorSuccess)
@@ -204,7 +249,7 @@ func renderImportLine(ln importLine, contentW int, now time.Time) string {
 		p.WriteString(dimStyle.Render("·"))
 	}
 	p.WriteString(" ")
-	p.WriteString(stageStyle.Render(string(ln.stage)))
+	p.WriteString(stageStyle.Render(localizedImportStage(lang, ln.stage)))
 	if ln.total > 0 && ln.current > 0 {
 		p.WriteString(mutedStyle.Render(fmt.Sprintf(" %d/%d", ln.current, ln.total)))
 	}
@@ -219,17 +264,21 @@ func renderImportLine(ln importLine, contentW int, now time.Time) string {
 		style = errStyle
 	case ln.level == "warn":
 		text = ln.message
-		if cd := retryCountdown(ln.retryAt, now); cd != "" {
+		if cd := retryCountdown(ln.retryAt, now, lang); cd != "" {
 			text += " · " + cd
 		}
 		style = warnStyle
 	default:
 		text = ln.message
 	}
-
+	// 逐行套色后自行拼接：lipgloss 对多行字符串会把每行补齐到块内最宽行，
+	// 前缀只在首行，整块渲染会让首行超出 contentW 被 viewport 裁掉。
 	prefixW := lipgloss.Width(prefix)
 	wrapW := contentW - prefixW
 	if wrapW < 20 {
+		// 窄终端下前缀（时间戳+图标+长阶段名+进度）已占掉大半行宽：正文另起行浅缩进，
+		// 换行宽度始终受 contentW 约束——按 20 列下限硬凑会让首行超宽被 viewport 裁掉，
+		// 恰好裁掉错误尾部的 HTTP 状态/provider 等排查依据。
 		var out strings.Builder
 		out.WriteString(prefix)
 		for _, l := range strings.Split(wrapText(text, max(10, contentW-4)), "\n") {
@@ -238,6 +287,8 @@ func renderImportLine(ln importLine, contentW int, now time.Time) string {
 		}
 		return out.String()
 	}
+	// 多行块消息（如切分确认预览）：首行跟在前缀后，其余行整体浅缩进——若按前缀宽
+	// 对齐续行，40+ 列的前缀会把整块内容挤到面板右半，左半全空。
 	head, body := text, ""
 	if i := strings.IndexByte(text, '\n'); i >= 0 {
 		head, body = text[:i], strings.TrimRight(text[i+1:], "\n")
@@ -274,32 +325,37 @@ func renderImportModal(width, height int, s *importState, frame int) string {
 	}
 	vpH := boxH - 4
 	if running {
-		vpH -= 2
+		vpH -= 2 // 顶部活动指示行 + 空行
 	}
 	if s.viewport.Height != vpH {
 		s.viewport.Height = vpH
 	}
 
-	hint := "  ↑↓ Cuộn · Esc Hủy/Đóng"
+	lang := s.language
+	hint := ui(lang, "  ↑↓ 滚动 · Esc 取消/关闭", "  ↑↓ cuộn · Esc hủy/đóng")
 	switch {
 	case s.paused && s.stage == imp.StageAwaitingConfirmation:
-		hint = "  ↑↓ Cuộn · 'y' Xác nhận phân tách · Esc Đóng"
+		hint = ui(lang, "  ↑↓ 滚动 · y 确认切分 · Esc 关闭", "  ↑↓ cuộn · y xác nhận phân đoạn · Esc đóng")
 	case running:
-		hint = "  ↑↓ Cuộn · Esc Hủy"
+		hint = ui(lang, "  ↑↓ 滚动 · Esc 取消", "  ↑↓ cuộn · Esc hủy")
 	}
 
 	body := strings.Split(s.viewport.View(), "\n")
 	if running {
+		// 运行中的活动指示：单颗流式面板同款星星 + 已用时，随主动画低频更新。
+		// 挂在 viewport 外的固定行——viewport 内容只随事件刷新，动画放里面不会动；
+		// 没有它，长时模型调用/退避重试期间面板纹丝不动，用户会误以为卡死。
 		star := lipgloss.NewStyle().Foreground(colorAccent).Bold(true).
 			Render(streamCursorFrames[frame%len(streamCursorFrames)])
 		status := lipgloss.NewStyle().Foreground(colorMuted).
-			Render(fmt.Sprintf(" Đang thực hiện · Thời gian: %s", formatElapsed(time.Since(s.startedAt))))
+			Render(fmt.Sprintf(" 进行中 · 已用时 %s", formatElapsed(time.Since(s.startedAt))))
 		body = append([]string{star + status, ""}, body...)
 	}
-	modal := renderPaddedModalFrame(boxW, boxH, "Nhập Tiểu Thuyết", hint, body)
+	modal := renderPaddedModalFrame(boxW, boxH, ui(lang, "导入外部小说", "Nhập tiểu thuyết bên ngoài"), hint, body)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
 
+// formatElapsed 渲染 mm:ss 已用时（超过 1 小时进位到 h:mm:ss）。
 func formatElapsed(d time.Duration) string {
 	d = d.Round(time.Second)
 	h := int(d.Hours())
@@ -317,12 +373,17 @@ func (m Model) handleImportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.Type {
 	case tea.KeyEsc:
+		// 仍在运行（未终态、未暂停）→ Esc 取消，交 runner 收尾；已终态或已在 awaiting 处停下
+		// （通道关闭）→ Esc 关闭面板。缺少 paused 分支会让 awaiting 停机后面板无法关闭（卡死）。
 		if !m.importer.done && !m.importer.paused && m.importer.cancel != nil {
 			m.importer.cancel()
 			return m, nil
 		}
 		succeeded := m.importer.stage == imp.StageDone && m.importer.err == nil
 		m.importer = nil
+		// 从欢迎页发起的导入成功收尾：欢迎页没有续写入口（bootstrap 的 Resume 只在
+		// 启动时跑一次），关面板时补跑恢复，让用户落到工作台的导入完成 Hold 门禁上，
+		// 而不是留在误按 Enter 即"开新书"的欢迎页。
 		if succeeded && m.mode == modeNew {
 			return m, tea.Batch(m.textarea.Focus(), resumeBook(m.runtime))
 		}
@@ -336,6 +397,7 @@ func (m Model) handleImportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyPgDown:
 		m.importer.viewport.HalfPageDown()
 	case tea.KeyRunes:
+		// 切分确认暂停处按 y = 原地重跑 /import --yes（无路径恢复），一次性放行当前切分。
 		if len(msg.Runes) == 1 && (msg.Runes[0] == 'y' || msg.Runes[0] == 'Y') &&
 			m.importer.paused && m.importer.stage == imp.StageAwaitingConfirmation {
 			return m.confirmImportSegmentation()
@@ -344,13 +406,18 @@ func (m Model) handleImportKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// confirmImportSegmentation 把"看过预览后放行"缩成一个按键：原地重跑导入并带上
+// AcceptSegmentation（恢复是无状态的，管线从 confirmation 缺失处继续）。它与 --yes 的
+// 区别是"看过预览的显式裁定"——带容错说明（Notes）的切分 --yes 不放行、y 放行；
+// 只随本次 Options 生效、不写 intent.json，之后 --guide 重切出的新切分仍会停下核对。
+// 沿用旧面板的源文件名与流程日志，让章节预览在继续分析时仍可回滚查看。
 func (m Model) confirmImportSegmentation() (tea.Model, tea.Cmd) {
 	prev := m.importer
 	m.importSeq++
-	state, listenCmd, err := startImportRun(m.runtime, m.importSeq, imp.Options{AcceptSegmentation: true}, m.width, m.height)
+	state, listenCmd, err := startImportRun(m.runtime, m.importSeq, imp.Options{AcceptSegmentation: true}, m.width, m.height, m.language)
 	if err != nil {
 		m.applyEvent(host.Event{
-			Time: time.Now(), Category: "ERROR", Summary: "Xác nhận phân tách thất bại: " + err.Error(), Level: "error",
+			Time: time.Now(), Category: "ERROR", Summary: "确认切分失败：" + err.Error(), Level: "error",
 		})
 		return m, nil
 	}
@@ -363,32 +430,38 @@ func (m Model) confirmImportSegmentation() (tea.Model, tea.Cmd) {
 	return m, listenCmd
 }
 
+// importEventMsg 单次 imp.Event 投递。
 type importEventMsg struct {
 	reqID int
 	ev    imp.Event
-	ch    <-chan imp.Event
+	ch    <-chan imp.Event // 同一通道继续监听下一条
 }
 
+// importClosedMsg 事件通道关闭（导入 goroutine 停止）信号。无论停在终态还是 awaiting 处，
+// 通道关闭都靠它可靠告知面板可关闭，避免只认终态导致 awaiting 停机后面板卡死。
 type importClosedMsg struct {
 	reqID int
 }
 
-func startImport(rt *host.Host, reqID int, args []string, width, height int) (*importState, tea.Cmd, error) {
+// startImport 启动一次外部小说导入：解析参数 → 创建 modal state → 监听事件流。
+func startImport(rt *host.Host, reqID int, args []string, width, height int, languages ...utils.Language) (*importState, tea.Cmd, error) {
 	opts, err := parseImportArgs(args)
 	if err != nil {
 		return nil, nil, err
 	}
-	return startImportRun(rt, reqID, opts, width, height)
+	return startImportRun(rt, reqID, opts, width, height, languages...)
 }
 
-func startImportRun(rt *host.Host, reqID int, opts imp.Options, width, height int) (*importState, tea.Cmd, error) {
+// startImportRun 以既定 Options 启动导入（y 确认等内部重入不经参数解析）。
+// width/height 用于初始化 viewport；cancel 函数挂在 state 上供 Esc 取消。
+func startImportRun(rt *host.Host, reqID int, opts imp.Options, width, height int, languages ...utils.Language) (*importState, tea.Cmd, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch, err := rt.ImportFrom(ctx, opts)
 	if err != nil {
 		cancel()
 		return nil, nil, err
 	}
-	state := newImportState(reqID, opts.SourcePath, width, height, cancel)
+	state := newImportState(reqID, opts.SourcePath, width, height, cancel, languages...)
 	return state, listenImportEvent(reqID, ch), nil
 }
 
@@ -402,6 +475,9 @@ func listenImportEvent(reqID int, ch <-chan imp.Event) tea.Cmd {
 	}
 }
 
+// parseImportArgs 解析 `/import <path> [--yes] [--story=open|closed] [--continue] [--guide=<说明>]`。
+// 无参数视为“从活动工作区恢复”，源路径不是恢复必需项（RFC §18）。
+// --guide 是自然语言切分指导，可含空格：从 --guide= 起其后全部内容并入指导文本，须置于最后。
 func parseImportArgs(args []string) (imp.Options, error) {
 	var opts imp.Options
 	for i := range args {
@@ -414,22 +490,22 @@ func parseImportArgs(args []string) (imp.Options, error) {
 		case strings.HasPrefix(a, "--story="):
 			v := strings.TrimPrefix(a, "--story=")
 			if v != "open" && v != "closed" {
-				return imp.Options{}, fmt.Errorf("--story chỉ nhận giá trị open hoặc closed: %q", v)
+				return imp.Options{}, fmt.Errorf("--story 只能是 open 或 closed：%q", v)
 			}
 			opts.StoryResolution = v
 		case strings.HasPrefix(a, "--guide="):
 			parts := append([]string{strings.TrimPrefix(a, "--guide=")}, args[i+1:]...)
 			g := strings.TrimSpace(strings.Join(parts, " "))
 			if g == "" {
-				return imp.Options{}, fmt.Errorf("--guide cần kèm hướng dẫn ngôn ngữ tự nhiên, ví dụ --guide=\"Hồi thứ X cũng là chương độc lập\"")
+				return imp.Options{}, fmt.Errorf("--guide 需要自然语言切分指导，例如 --guide=幕间·X 也是独立章节")
 			}
 			opts.Guidance = g
 			return opts, nil
 		case strings.HasPrefix(a, "--"):
-			return imp.Options{}, fmt.Errorf("tùy chọn không hợp lệ %q (hỗ trợ: --yes / --story=open|closed / --continue / --guide=<hướng dẫn>)", a)
+			return imp.Options{}, fmt.Errorf("未知选项 %q（支持：--yes / --story=open|closed / --continue / --guide=<切分指导>）", a)
 		default:
 			if opts.SourcePath != "" {
-				return imp.Options{}, fmt.Errorf("chỉ nhận một đường dẫn tệp nguồn: thừa %q", a)
+				return imp.Options{}, fmt.Errorf("只接受一个源文件路径：多了 %q", a)
 			}
 			opts.SourcePath = a
 		}

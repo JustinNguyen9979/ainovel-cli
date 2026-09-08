@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
 )
 
 func TestRenderEPUB_StructuralInvariants(t *testing.T) {

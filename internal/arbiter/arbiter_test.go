@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/llmcontract"
+	storepkg "github.com/JustinNguyen9979/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/llm"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/llmcontract"
-	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
 // scriptedModel 按调用序号返回预设文本。
@@ -49,6 +49,15 @@ func (m *scriptedModel) Generate(_ context.Context, messages []agentcore.Message
 		Role:    agentcore.RoleAssistant,
 		Content: []agentcore.ContentBlock{agentcore.TextBlock(m.take())},
 	}}, nil
+}
+
+func TestInterventionFactsQueueHead(t *testing.T) {
+	if got := (InterventionFacts{}).QueueHead(); got != 0 {
+		t.Fatalf("empty queue head = %d", got)
+	}
+	if got := (InterventionFacts{PendingRewrites: []int{4, 5}}).QueueHead(); got != 4 {
+		t.Fatalf("queue head = %d", got)
+	}
 }
 
 func TestDecidePlanStartDoesNotSendThinkingToChatModel(t *testing.T) {

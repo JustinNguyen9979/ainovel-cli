@@ -9,14 +9,53 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/llmcontract"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/llm"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/llmcontract"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
+func TestValidateAnalysisAndLegacyHelpers(t *testing.T) {
+	validFacts := domain.ChapterFacts{Title: "第一章", Summary: "摘要", KeyEvents: []string{"事件"}, HookType: "mystery", DominantStrand: "quest"}
+	valid := domain.RevisionAnalysis{ChangeSummary: "changed", Facts: validFacts, StyleDelta: domain.StyleDelta{Prose: []string{"direct"}, Dialogue: []domain.CharacterVoice{{Name: "甲", Rules: []string{"short"}}}}, OutlineImpact: &domain.OutlineFeedback{Deviation: "deviation", Suggestion: "suggestion"}, DownstreamIssues: []string{"issue"}}
+	if err := validateAnalysis(&valid); err != nil {
+		t.Fatalf("valid analysis rejected: %v", err)
+	}
+	cases := []domain.RevisionAnalysis{
+		{Facts: validFacts, StyleDelta: valid.StyleDelta},
+		{ChangeSummary: "x", Facts: domain.ChapterFacts{Summary: "summary"}, StyleDelta: valid.StyleDelta},
+		{ChangeSummary: "x", Facts: validFacts, StyleDelta: valid.StyleDelta, OutlineImpact: &domain.OutlineFeedback{Deviation: "only"}},
+		{ChangeSummary: "x", Facts: validFacts, StyleDelta: domain.StyleDelta{Prose: []string{""}}},
+		{ChangeSummary: "x", Facts: validFacts, StyleDelta: domain.StyleDelta{Dialogue: []domain.CharacterVoice{{Rules: []string{"x"}}}}},
+		{ChangeSummary: "x", Facts: validFacts, StyleDelta: domain.StyleDelta{Dialogue: []domain.CharacterVoice{{Name: "甲", Rules: []string{""}}}}},
+		{ChangeSummary: "x", Facts: validFacts, StyleDelta: valid.StyleDelta, DownstreamIssues: []string{""}},
+	}
+	for i, analysis := range cases {
+		if err := validateAnalysis(&analysis); err == nil {
+			t.Errorf("invalid analysis %d accepted", i)
+		}
+	}
+	at := time.Now()
+	a := testRecord(1, "content", validFacts, domain.StyleDelta{}, at)
+	b := a
+	if !sameLegacyRecord(a, b) {
+		t.Fatal("identical legacy records should match")
+	}
+	b.Content = "changed"
+	if sameLegacyRecord(a, b) {
+		t.Fatal("different legacy records should not match")
+	}
+	for raw, want := range map[string]bool{`{"committed":true}`: true, `"{\"committed\":true}"`: true, `{"committed":false}`: false, `bad`: false} {
+		if got := toolResultCommitted(raw); got != want {
+			t.Errorf("toolResultCommitted(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
 func TestAnalysisContractIsStrictReady(t *testing.T) {
+	m := domain.RevisionAnalysis{}
+	_ = m
 	if err := llmcontract.ValidateStrictReady(analysisContract.Schema); err != nil {
 		t.Fatal(err)
 	}

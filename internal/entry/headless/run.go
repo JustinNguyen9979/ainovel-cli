@@ -6,19 +6,21 @@ import (
 	"os"
 	"strings"
 
-	"github.com/voocel/ainovel-cli/assets"
-	"github.com/voocel/ainovel-cli/internal/bootstrap"
-	"github.com/voocel/ainovel-cli/internal/diag"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/entry/startup"
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/assets"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/bootstrap"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/diag"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/entry/startup"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 )
 
 type Options struct {
-	Prompt string
-	Stdout io.Writer
-	Stderr io.Writer
+	Prompt   string
+	Stdout   io.Writer
+	Stderr   io.Writer
+	Language utils.Language
 }
 
 // Run 以无界面模式运行会话内核，直接消费 Engine 事件与流式输出。
@@ -38,14 +40,18 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 		return err
 	}
 	defer eng.Close()
+	lang := opts.Language
+	if lang == "" {
+		lang, _ = utils.ParseLanguage(cfg.Language)
+	}
 	if logErr := eng.FileLogError(); logErr != nil {
-		fmt.Fprintf(stderr, "警告：文件日志不可用，继续使用终端日志：%v\n", logErr)
+		fmt.Fprintln(stderr, utils.T(lang, utils.MsgHeadlessLogWarning, logErr))
 	}
 	// 运行结束 / 出错返回时落一份脱敏诊断，方便 headless 用户贴 issue。
 	// （外部 kill 的挂死不走 defer，仍需在 TUI 里手动 /diag。）
 	defer func() {
 		if _, err := diag.Export(store.NewStore(eng.Dir())); err != nil {
-			fmt.Fprintf(stderr, "警告：诊断报告导出失败：%v\n", err)
+			fmt.Fprintln(stderr, utils.T(lang, utils.MsgHeadlessDiagnosticWarning, err))
 		}
 	}()
 
@@ -55,7 +61,7 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stderr, "headless 启动: %s\n", eng.Dir())
+		fmt.Fprintln(stderr, utils.T(lang, utils.MsgHeadlessStart, eng.Dir()))
 		// 启动侧确定性生成本书用户规则快照（用原始 prompt 归一化），须在 StartPrepared 前。
 		if err := eng.PrepareUserRules(prompt); err != nil {
 			return err
@@ -74,9 +80,9 @@ func Run(cfg bootstrap.Config, bundle assets.Bundle, opts Options) error {
 			return err
 		}
 		if label == "" {
-			return fmt.Errorf("headless 模式需要 --prompt，或输出目录 %q 下已有可恢复会话", eng.Dir())
+			return fmt.Errorf("%s", utils.T(lang, utils.MsgHeadlessNeedsPrompt, eng.Dir()))
 		}
-		fmt.Fprintf(stderr, "headless 恢复: %s (%s)\n", eng.Dir(), label)
+		fmt.Fprintln(stderr, utils.T(lang, utils.MsgHeadlessResume, eng.Dir(), label))
 		return consume(eng, stdout, stderr, false)
 	}
 

@@ -3,9 +3,10 @@ package tui
 import (
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/voocel/ainovel-cli/internal/host"
 )
 
 const resetForeground = "\x1b[39m"
@@ -79,7 +80,7 @@ func highlightANSIByteRange(value string, start, end int) string {
 
 // renderInputBox 渲染底部输入区：输入框、快捷键提示行、最底部用量状态栏。
 // 输入框单独负责输入与提示，不承载启动模式栏。
-func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir string, width int) string {
+func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir string, width int, languages ...utils.Language) string {
 	innerW := width - 4 // border + padding
 	if innerW < 12 {
 		innerW = 12
@@ -107,7 +108,7 @@ func renderInputBox(inputView, hints string, snap host.UISnapshot, outputDir str
 	hintBlock := hintStyle.Render(line2)
 
 	// 状态栏占用输入区原有的末尾空行：整块高度不变，layoutHeights 无需调整。
-	statusBlock := hintStyle.Render(renderStatusBar(snap, outputDir, innerW))
+	statusBlock := hintStyle.Render(renderStatusBar(snap, outputDir, innerW, languages...))
 
 	return inputBlock + "\n" + hintBlock + "\n" + statusBlock
 }

@@ -33,6 +33,18 @@ func (fastRetryErr) Error() string             { return "rate limited" }
 func (fastRetryErr) Retryable() bool           { return true }
 func (fastRetryErr) RetryAfter() time.Duration { return time.Millisecond }
 
+func TestErrorWrappersExposeDetails(t *testing.T) {
+	raw := &errTruncated{Raw: "raw"}
+	if raw.Error() == "" {
+		t.Fatal("truncated error should describe failure")
+	}
+	inner := errors.New("inner")
+	semantic := &errSemantic{Raw: "raw", Err: inner}
+	if semantic.Error() != "inner" || !errors.Is(semantic, inner) {
+		t.Fatal("semantic wrapper should preserve cause")
+	}
+}
+
 // TestCallStructuredNotifiesRetries 守护重试可见性：请求退避与校验重问都必须回显，
 // 否则指数退避可静默数分钟，用户会误以为导入卡死（截图问题：3 分钟无声后才报错）。
 // 请求退避还必须携带非零 retryAt 截止时刻——UI 倒计时依赖它；校验重问即时发生，retryAt 为零。

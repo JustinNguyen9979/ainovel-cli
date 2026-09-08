@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/voocel/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
 )
 
 // fakeEngine 模拟 host：Abort 后像 waitDone 那样向 done 发送一次。done 带 1 缓冲，

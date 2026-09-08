@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 	"github.com/voocel/agentcore/schema"
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // References 嵌入的参考资料。
@@ -64,6 +64,12 @@ func (r *contextReads) warn(scope string, err error) {
 	r.warnings = append(r.warnings, msg)
 }
 
+func (r *contextReads) fail(err error) {
+	if r.err == nil {
+		r.err = err
+	}
+}
+
 func (r *contextReads) require(scope string, err error) {
 	if r.err != nil || err == nil || os.IsNotExist(err) || errors.Is(err, store.ErrOutlineChapterNotFound) {
 		return
@@ -101,15 +107,28 @@ func (t *ContextTool) ConcurrencySafe(_ json.RawMessage) bool { return true }
 func (t *ContextTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("chapter", schema.Int("章节号。不传则返回进度状态和基础设定（Architect 用）；传入则额外返回该章的写作上下文（Writer/Editor 用）")),
+		schema.Property("volume", schema.Int("长篇 Architect 可选：聚焦读取的卷序号；必须与 arc 同时传入，不能与 chapter 同时使用")),
+		schema.Property("arc", schema.Int("长篇 Architect 可选：聚焦读取的卷内弧序号；必须与 volume 同时传入，不能与 chapter 同时使用")),
 	)
 }
 
 func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var a struct {
 		Chapter int `json:"chapter"`
+		Volume  int `json:"volume"`
+		Arc     int `json:"arc"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return nil, fmt.Errorf("invalid args: %w", err)
+	}
+	if a.Chapter < 0 || a.Volume < 0 || a.Arc < 0 {
+		return nil, fmt.Errorf("chapter, volume and arc must be >= 0")
+	}
+	if a.Chapter > 0 && (a.Volume > 0 || a.Arc > 0) {
+		return nil, fmt.Errorf("chapter cannot be combined with volume or arc")
+	}
+	if (a.Volume > 0) != (a.Arc > 0) {
+		return nil, fmt.Errorf("volume and arc must be provided together")
 	}
 
 	result := make(map[string]any)
@@ -134,7 +153,7 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 	} else {
 		// Architect 路径：只返回状态 + 结构化数据，不加载全量原文
 		t.buildProgressStatus(result, reads)
-		t.buildArchitectContext(result, reads)
+		t.buildArchitectContext(result, reads, a.Volume, a.Arc)
 	}
 
 	// 注入 working_memory.user_rules（canonical 路径）。架构师路径原本没有 working_memory，

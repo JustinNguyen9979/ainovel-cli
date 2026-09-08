@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+func TestWorkspaceDirReturnsRoot(t *testing.T) {
+	w := OpenWorkspace("/tmp/book")
+	if w.Dir() != filepath.Join("/tmp/book", "meta", "import") {
+		t.Fatalf("workspace dir = %q", w.Dir())
+	}
+}
+
 func TestDigestStableAndDistinct(t *testing.T) {
 	a := Digest([]byte("第一章"))
 	if a != Digest([]byte("第一章")) {

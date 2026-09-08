@@ -2,12 +2,20 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
+	"unicode"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/bootstrap"
+	buildversion "github.com/JustinNguyen9979/ainovel-cli/internal/version"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/JustinNguyen9979/ainovel-cli/internal/diag"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/ainovel-cli/internal/diag"
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/store"
 )
 
 // 消息类型
@@ -53,7 +61,56 @@ type (
 	streamClearMsg     struct{}  // 清空流式缓冲（新消息开始）
 	streamFlushTickMsg struct{}  // 流式刷新节流（仅有待刷数据时调度）
 	quitResetMsg       struct{}  // 双次 Ctrl+C 超时重置
+	updateCheckMsg     struct {
+		result *buildversion.CheckResult
+		err    error
+	}
 )
+
+const updateNotesPreviewWidth = 56
+
+func checkForUpdate(currentVersion string) tea.Cmd {
+	return func() tea.Msg {
+		configDir := bootstrap.DefaultConfigDir()
+		if configDir == "" {
+			return updateCheckMsg{err: fmt.Errorf("không xác định được thư mục cache kiểm tra cập nhật")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		result, err := buildversion.CheckUpdate(ctx, buildversion.CheckOptions{
+			CurrentVersion: currentVersion,
+			CachePath:      filepath.Join(configDir, "update-check.json"),
+		})
+		return updateCheckMsg{result: result, err: err}
+	}
+}
+
+func formatUpdateNotice(result *buildversion.CheckResult) string {
+	notice := fmt.Sprintf("Đã phát hành phiên bản mới %s", result.Latest)
+	if preview := updateNotesPreview(result.Notes); preview != "" {
+		notice += " · " + preview
+	}
+	return notice + " · Chạy ainovel-cli update để nâng cấp"
+}
+
+func updateNotesPreview(notes string) string {
+	plain := ansi.Strip(notes)
+	plain = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return -1
+		}
+		return r
+	}, plain)
+	for _, rawLine := range strings.Split(plain, "\n") {
+		line := strings.TrimSpace(rawLine)
+		line = strings.TrimSpace(strings.TrimLeft(line, "#>*-"))
+		line = strings.Join(strings.Fields(line), " ")
+		if line != "" {
+			return truncate(line, updateNotesPreviewWidth)
+		}
+	}
+	return ""
+}
 
 // --- Cmd 函数 ---
 
@@ -146,9 +203,11 @@ func runCoCreate(rt *host.Host, state *cocreateState) tea.Cmd {
 	state.deltaCh = make(chan cocreateStreamItem, 64)
 	state.doneCh = make(chan cocreateDoneMsg, 1)
 	// 阶段共创带故事状态摘要、产出"后续方向 brief"；冷启动从零澄清需求。两者签名一致。
-	stream := rt.CoCreateStream
-	if state.stage {
-		stream = rt.StageCoCreateStream
+	stream := func(ctx context.Context, history []host.CoCreateMessage, onProgress func(kind, text string)) (host.CoCreateReply, error) {
+		if state.stage {
+			return rt.StageCoCreateStream(ctx, history, onProgress, state.language)
+		}
+		return rt.CoCreateStream(ctx, history, onProgress, state.language)
 	}
 	start := func() tea.Msg {
 		go func() {

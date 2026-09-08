@@ -1,17 +1,16 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/host"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/utils"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/voocel/ainovel-cli/internal/host"
-	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
 const maxEvents = 500
@@ -51,65 +50,72 @@ var toolSpinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯"
 
 // Model 是 TUI 的顶层状态。
 type Model struct {
-	runtime        *host.Host
-	cocreate       *cocreateState
-	help           *helpState
-	modelSwitch    *modelSwitchState
-	modelConfig    *modelConfigState
-	report         *reportState
-	version        string
-	importer       *importState
-	importSeq      int
-	simulator      *simulationState
-	simSeq         int
-	compItems      []commandPaletteItem
-	compIdx        int
-	compActive     bool
-	commandToken   string // 当前已注册的命令 token；仅渲染该段，不染参数
-	snapshot       host.UISnapshot
-	events         []host.Event
-	eventIndex     map[string]int   // event.ID → m.events 下标；调用类事件到达时原地更新
-	viewport       viewport.Model   // 事件流 viewport
-	streamVP       viewport.Model   // 流式输出 viewport
-	detailVP       viewport.Model   // 右侧详情 viewport
-	stateVP        viewport.Model   // 左侧状态侧栏 viewport（可滚动）
-	streamBuf      *strings.Builder // 流式文本累积缓冲
-	streamRounds   []string
-	textarea       textarea.Model
-	width          int
-	height         int
-	autoScroll     bool
-	streamScroll   bool      // 流式面板自动跟随
-	streamDirty    bool      // streamRounds 有尚未刷新的 delta
-	flushPending   bool      // 已调度一次流式刷新，避免每个 delta 重复启动 timer
-	lastKeyAt      time.Time // 上次非 Enter 按键时间；KeyEnter 节流防粘贴 \n 流误触发提交
-	inputHistory   []string  // 已提交的输入历史（去重：相邻不重复）
-	historyIdx     int       // 当前浏览索引；== len(inputHistory) 表示"未浏览，正在编辑草稿"
-	historyDraft   string    // 进入历史浏览前保存的草稿，回到末端时恢复
-	focusPane      focusPane
-	hoverPane      focusPane
-	hoverActive    bool
-	mode           appMode
-	starting       bool // UI 已进入工作台，Host 正在执行启动初始化
-	startupMode    startupMode
-	importHint     string // 启动时检测到未完成导入的提示（欢迎屏显示；发起导入后清空）
-	cocreateSeq    int
-	reportSeq      int
-	err            error
-	spinnerIdx     int
-	toolSpinnerIdx int  // 事件流进行中行的独立帧索引（150ms tick，不影响顶栏/星星）
-	toolTicking    bool // 已启动工具动画 timer；无运行事件时自动停止
-	cursorIdx      int  // 流式光标帧索引（随主动画推进）
-	streamRound    int  // 流式输出轮次计数
-	quitPending    bool // 双次 Ctrl+C 退出确认
-	abortPending   bool // 等待 Done 回来的手动暂停
-	mouseOff       bool // true 时已禁用鼠标上报，让用户原生拖拽选中复制；再次切换恢复
+	runtime            *host.Host
+	cocreate           *cocreateState
+	help               *helpState
+	modelSwitch        *modelSwitchState
+	modelConfig        *modelConfigState
+	report             *reportState
+	version            string
+	language           utils.Language
+	disableUpdateCheck bool
+	importer           *importState
+	importSeq          int
+	simulator          *simulationState
+	simSeq             int
+	compItems          []commandPaletteItem
+	compIdx            int
+	compActive         bool
+	commandToken       string // 当前已注册的命令 token；仅渲染该段，不染参数
+	snapshot           host.UISnapshot
+	events             []host.Event
+	eventIndex         map[string]int   // event.ID → m.events 下标；调用类事件到达时原地更新
+	viewport           viewport.Model   // 事件流 viewport
+	streamVP           viewport.Model   // 流式输出 viewport
+	detailVP           viewport.Model   // 右侧详情 viewport
+	stateVP            viewport.Model   // 左侧状态侧栏 viewport（可滚动）
+	streamBuf          *strings.Builder // 流式文本累积缓冲
+	streamRounds       []string
+	textarea           textarea.Model
+	width              int
+	height             int
+	autoScroll         bool
+	streamScroll       bool      // 流式面板自动跟随
+	streamDirty        bool      // streamRounds 有尚未刷新的 delta
+	flushPending       bool      // 已调度一次流式刷新，避免每个 delta 重复启动 timer
+	lastKeyAt          time.Time // 上次非 Enter 按键时间；KeyEnter 节流防粘贴 \n 流误触发提交
+	inputHistory       []string  // 已提交的输入历史（去重：相邻不重复）
+	historyIdx         int       // 当前浏览索引；== len(inputHistory) 表示"未浏览，正在编辑草稿"
+	historyDraft       string    // 进入历史浏览前保存的草稿，回到末端时恢复
+	focusPane          focusPane
+	hoverPane          focusPane
+	hoverActive        bool
+	mode               appMode
+	starting           bool // UI 已进入工作台，Host 正在执行启动初始化
+	startupMode        startupMode
+	importHint         string // 启动时检测到未完成导入的提示（欢迎屏显示；发起导入后清空）
+	updateHint         string // 启动版本检查发现新版本的提示（欢迎屏与事件流显示）
+	cocreateSeq        int
+	reportSeq          int
+	err                error
+	spinnerIdx         int
+	toolSpinnerIdx     int  // 事件流进行中行的独立帧索引（150ms tick，不影响顶栏/星星）
+	toolTicking        bool // 已启动工具动画 timer；无运行事件时自动停止
+	cursorIdx          int  // 流式光标帧索引（随主动画推进）
+	streamRound        int  // 流式输出轮次计数
+	quitPending        bool // 双次 Ctrl+C 退出确认
+	abortPending       bool // 等待 Done 回来的手动暂停
+	mouseOff           bool // true 时已禁用鼠标上报，让用户原生拖拽选中复制；再次切换恢复
 }
 
 // NewModel 创建 TUI Model。
-func NewModel(rt *host.Host, version string) Model {
+func NewModel(rt *host.Host, version string, languages ...utils.Language) Model {
+	language := utils.LanguageVI
+	if len(languages) > 0 && languages[0] != "" {
+		language = languages[0]
+	}
 	ta := textarea.New()
-	ta.Placeholder = placeholderForNewMode(startupModeQuick)
+	ta.Placeholder = utils.T(language, utils.MsgQuickPlaceholder)
 	ta.CharLimit = 5000
 	ta.SetHeight(1)
 	// MaxHeight=6 让超长输入按宽度自动 wrap 显示成多行（视觉上限 6 行）。
@@ -138,29 +144,31 @@ func NewModel(rt *host.Host, version string) Model {
 	// 半路书若不主动告知，用户只有在创作被门禁拒绝时才会发现（RFC §18.2）。
 	importHint := ""
 	if rt != nil {
-		importHint = rt.ImportResumeHint()
+		importHint = rt.ImportResumeHint(language)
 	}
 
 	return Model{
-		runtime:      rt,
-		version:      strings.TrimSpace(version),
-		autoScroll:   true,
-		streamScroll: true,
-		mode:         modeNew,
-		startupMode:  startupModeQuick,
-		importHint:   importHint,
-		textarea:     ta,
-		viewport:     vp,
-		streamVP:     svp,
-		detailVP:     dvp,
-		stateVP:      stvp,
-		streamBuf:    &strings.Builder{},
-		eventIndex:   make(map[string]int),
+		runtime:            rt,
+		version:            strings.TrimSpace(version),
+		language:           language,
+		autoScroll:         true,
+		streamScroll:       true,
+		mode:               modeNew,
+		startupMode:        startupModeQuick,
+		importHint:         importHint,
+		textarea:           ta,
+		viewport:           vp,
+		streamVP:           svp,
+		detailVP:           dvp,
+		stateVP:            stvp,
+		streamBuf:          &strings.Builder{},
+		eventIndex:         make(map[string]int),
+		disableUpdateCheck: false,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		textarea.Blink,
 		listenEvents(m.runtime),
 		listenDone(m.runtime),
@@ -168,7 +176,11 @@ func (m Model) Init() tea.Cmd {
 		tickSnapshot(m.runtime),
 		bootstrapRuntime(m.runtime),
 		tickSpinner(),
-	)
+	}
+	if !m.disableUpdateCheck {
+		cmds = append(cmds, checkForUpdate(m.version))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) paneAtMouse(x, y int) (focusPane, bool) {
@@ -239,7 +251,7 @@ func (m *Model) flushStreamIfDirty() bool {
 // refreshEventViewport 重新渲染事件流内容并设置 viewport。
 func (m *Model) refreshEventViewport() {
 	centerW := m.eventFlowWidth()
-	content := renderEventContent(m.events, centerW, m.toolSpinnerIdx)
+	content := renderEventContent(m.events, centerW, m.toolSpinnerIdx, m.language)
 	snap := m.snapshot
 	if m.starting {
 		snap.IsRunning = true
@@ -270,7 +282,7 @@ func (m *Model) refreshDetailViewport() {
 	if rightW <= 4 {
 		return
 	}
-	m.detailVP.SetContent(renderDetailContent(m.snapshot, rightW-4))
+	m.detailVP.SetContent(renderDetailContent(m.snapshot, rightW-4, m.language))
 }
 
 // refreshStateViewport 把左侧状态侧栏内容刷进 viewport。
@@ -280,7 +292,7 @@ func (m *Model) refreshStateViewport() {
 	if leftW <= 4 {
 		return
 	}
-	m.stateVP.SetContent(renderStateContent(m.snapshot, leftW-4))
+	m.stateVP.SetContent(renderStateContent(m.snapshot, leftW-4, m.language))
 }
 
 // updateViewportSize 根据当前窗口尺寸更新 viewport 大小。
@@ -443,48 +455,83 @@ func (m *Model) textareaIsMultiline() bool {
 func (m *Model) inputHints() string {
 	dimStyle := lipgloss.NewStyle().Foreground(colorDim)
 	if m.quitPending {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true).Render("Nhấn Ctrl+C một lần nữa để thoát")
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Bold(true).Render(localizedCompletionHint(m.language))
 	}
 	limitHint := m.inputLimitHint()
-	suffix := limitHint + " · Ctrl+R Chế độ copy"
+	suffix := localizedCopyHint(m.language)
 	if m.mode == modeNew {
 		suffix = limitHint
+	} else {
+		suffix = limitHint + suffix
 	}
 	if m.mouseOff && m.mode != modeNew {
 		return lipgloss.NewStyle().Foreground(colorAccent).Bold(true).
-			Render("✂ Chế độ bôi đen copy: Kéo chuột chọn văn bản để sao chép · Ctrl+R Quay lại")
+			Render(ui(m.language, "✂ 选中复制模式：可拖拽选中文本复制 · Ctrl+R 退出恢复鼠标交互", "✂ Chế độ chọn để sao chép: kéo để chọn văn bản · Ctrl+R khôi phục tương tác chuột"))
 	}
 	if m.cocreate != nil {
-		scrollHint := " · Tab Cuộn: Hội thoại"
+		if m.language == utils.LanguageZH {
+			scrollHint := " · Tab 滚动:对话"
+			if m.cocreate.focusPrompt {
+				scrollHint = " · Tab 滚动:创作指令"
+			}
+			switch {
+			case m.cocreate.awaiting:
+				return dimStyle.Render("等待 AI 回复 · Esc 退出共创" + scrollHint + suffix)
+			case m.cocreate.canStart():
+				startLabel := "Ctrl+S 开始创作"
+				if m.cocreate.stage {
+					startLabel = "Ctrl+S 应用并继续"
+				}
+				return dimStyle.Render("Enter 发送 · " + startLabel + " · Esc 退出共创" + scrollHint + suffix)
+			default:
+				return dimStyle.Render("Enter 发送 · Esc 退出共创" + scrollHint + suffix)
+			}
+		}
+		scrollHint := " · Tab cuộn: hội thoại"
 		if m.cocreate.focusPrompt {
-			scrollHint = " · Tab Cuộn: Chỉ thị"
+			scrollHint = " · Tab cuộn: chỉ dẫn sáng tác"
 		}
 		switch {
 		case m.cocreate.awaiting:
-			return dimStyle.Render("Chờ AI phản hồi · Esc Thoát đồng sáng tác" + scrollHint + suffix)
+			return dimStyle.Render("Đang chờ AI trả lời · Esc thoát đồng sáng tác" + scrollHint + suffix)
 		case m.cocreate.canStart():
-			startLabel := "Ctrl+S Bắt đầu sáng tác"
+			startLabel := "Ctrl+S bắt đầu sáng tác"
 			if m.cocreate.stage {
-				startLabel = "Ctrl+S Áp dụng & Tiếp tục"
+				startLabel = "Ctrl+S áp dụng và tiếp tục"
 			}
-			return dimStyle.Render("Enter Gửi · " + startLabel + " · Esc Thoát" + scrollHint + suffix)
+			return dimStyle.Render("Enter gửi · " + startLabel + " · Esc thoát đồng sáng tác" + scrollHint + suffix)
 		default:
-			return dimStyle.Render("Enter Gửi · Esc Thoát đồng sáng tác" + scrollHint + suffix)
+			return dimStyle.Render("Enter gửi · Esc thoát đồng sáng tác" + scrollHint + suffix)
 		}
 	}
 	if m.mode == modeNew {
-		if m.startupMode == startupModeQuick {
-			return dimStyle.Render("Tab Đổi chế độ · Gõ / để xem lệnh · Enter Bắt đầu viết ngay · Esc Xóa" + suffix)
+		if m.language == utils.LanguageZH {
+			if m.startupMode == startupModeQuick {
+				return dimStyle.Render("Tab 切换启动模式 · 输入 / 搜索命令 · Enter 直接开始创作 · Esc 清空输入" + suffix)
+			}
+			return dimStyle.Render("Tab 切换启动模式 · 输入 / 搜索命令 · Enter 开始共创对话 · Esc 清空输入" + suffix)
 		}
-		return dimStyle.Render("Tab Đổi chế độ · Gõ / để xem lệnh · Enter Bắt đầu đồng sáng tác · Esc Xóa" + suffix)
+		if m.startupMode == startupModeQuick {
+			return dimStyle.Render("Tab đổi chế độ · nhập / để tìm lệnh · Enter bắt đầu sáng tác · Esc xóa nhập liệu" + suffix)
+		}
+		return dimStyle.Render("Tab đổi chế độ · nhập / để tìm lệnh · Enter bắt đầu đồng sáng tác · Esc xóa nhập liệu" + suffix)
+	}
+	if m.language == utils.LanguageZH {
+		switch m.snapshot.RuntimeState {
+		case "pausing":
+			return dimStyle.Render("正在暂停创作 · 请等待当前轮次结束" + suffix)
+		case "paused":
+			return dimStyle.Render("输入 / 搜索命令 · Enter 继续创作 · Esc 清空输入" + suffix)
+		}
+		return dimStyle.Render("输入 / 搜索命令 · 点击/Tab 切换面板 · ↑↓ 滚动 · End 跳底 · Ctrl+L 清屏 · Esc 暂停 · Enter 发送" + suffix)
 	}
 	switch m.snapshot.RuntimeState {
 	case "pausing":
-		return dimStyle.Render("Đang tạm dừng sáng tác · Vui lòng chờ vòng hiện tại kết thúc" + suffix)
+		return dimStyle.Render("Đang tạm dừng sáng tác · hãy chờ vòng hiện tại kết thúc" + suffix)
 	case "paused":
-		return dimStyle.Render("Gõ / để xem lệnh · Enter Tiếp tục sáng tác · Esc Xóa" + suffix)
+		return dimStyle.Render("Nhập / để tìm lệnh · Enter tiếp tục sáng tác · Esc xóa nhập liệu" + suffix)
 	}
-	return dimStyle.Render("Gõ / để xem lệnh · Click/Tab Đổi panel · ↑↓ Cuộn · End Về cuối · Ctrl+L Xóa màn hình · Esc Tạm dừng · Enter Gửi" + suffix)
+	return dimStyle.Render("Nhập / để tìm lệnh · nhấp/Tab đổi panel · ↑↓ cuộn · End xuống cuối · Ctrl+L xóa · Esc tạm dừng · Enter gửi" + suffix)
 }
 
 func (m *Model) inputLimitHint() string {
@@ -496,7 +543,7 @@ func (m *Model) inputLimitHint() string {
 	if used < limit*4/5 {
 		return ""
 	}
-	return fmt.Sprintf(" · Đã nhập %d/%d", used, limit)
+	return localizedInputLimit(m.language, used, limit)
 }
 
 func (m *Model) eventFlowWidth() int {
@@ -542,7 +589,15 @@ func (m *Model) outputDir() string {
 }
 
 func defaultSteerPlaceholder() string {
-	return "Nhập can thiệp cốt truyện, ví dụ: đẩy tuyến tình cảm lên chương 4"
+	return utils.T(utils.LanguageVI, utils.MsgSteerPlaceholder)
+}
+
+func (m *Model) localizedSteerPlaceholder() string {
+	return utils.T(m.language, utils.MsgSteerPlaceholder)
+}
+
+func (m *Model) localizedDonePlaceholder() string {
+	return utils.T(m.language, utils.MsgDonePlaceholder)
 }
 
 func (m *Model) syncRuntimePlaceholder() {
@@ -550,29 +605,29 @@ func (m *Model) syncRuntimePlaceholder() {
 		return
 	}
 	if m.starting {
-		m.textarea.Placeholder = "Đang khởi tạo sáng tác..."
+		m.textarea.Placeholder = utils.T(m.language, utils.MsgStartingQuick)
 		return
 	}
 	switch m.snapshot.RuntimeState {
 	case "completed":
-		m.textarea.Placeholder = donePlaceholder
+		m.textarea.Placeholder = m.localizedDonePlaceholder()
 	case "pausing":
-		m.textarea.Placeholder = "Đang tạm dừng sáng tác..."
+		m.textarea.Placeholder = utils.T(m.language, utils.MsgCreationPausing)
 	case "paused":
 		if m.snapshot.AdvanceMode == "review" && m.snapshot.Phase == "writing" {
-			m.textarea.Placeholder = "Chờ nghiệm thu: Nhập ý kiến chỉnh sửa, hoặc /next để duyệt chương tiếp"
+			m.textarea.Placeholder = utils.T(m.language, utils.MsgReviewWaiting)
 		} else {
-			m.textarea.Placeholder = "Sáng tác đã tạm dừng, nhập nội dung bất kỳ để tiếp tục"
+			m.textarea.Placeholder = utils.T(m.language, utils.MsgCreationResume)
 		}
 	default:
 		if !m.snapshot.IsRunning {
 			if m.snapshot.AdvanceMode == "review" && m.snapshot.Phase == "writing" {
-				m.textarea.Placeholder = "Chờ nghiệm thu: Nhập ý kiến chỉnh sửa, hoặc /next để duyệt chương tiếp"
+				m.textarea.Placeholder = utils.T(m.language, utils.MsgReviewWaiting)
 			} else {
-				m.textarea.Placeholder = "Sáng tác bị gián đoạn, nhập nội dung bất kỳ để tiếp tục"
+				m.textarea.Placeholder = utils.T(m.language, utils.MsgCreationInterrupted)
 			}
 		} else {
-			m.textarea.Placeholder = defaultSteerPlaceholder()
+			m.textarea.Placeholder = m.localizedSteerPlaceholder()
 		}
 	}
 }
@@ -585,18 +640,19 @@ func (m *Model) renderBottomBar() string {
 		m.snapshot,
 		m.outputDir(),
 		m.width,
+		m.language,
 	)
 	if m.mode != modeNew || m.cocreate != nil {
 		return inputBox
 	}
-	return renderStartupModeBar(m.width, m.startupMode) + "\n" + inputBox
+	return renderStartupModeBar(m.width, m.startupMode, m.language) + "\n" + inputBox
 }
 
 func (m *Model) layoutHeights() (topH, inputH, bodyH int) {
 	if m.width == 0 || m.height == 0 {
 		return 1, 4, 20
 	}
-	topH = lipgloss.Height(renderTopBar(m.snapshot, m.width, m.currentSpinnerFrame(), m.version))
+	topH = lipgloss.Height(renderTopBar(m.snapshot, m.width, m.currentSpinnerFrame(), m.version, m.language))
 	inputH = lipgloss.Height(m.renderBottomBar())
 	bodyH = m.height - topH - inputH
 	if bodyH < 3 {
@@ -607,17 +663,17 @@ func (m *Model) layoutHeights() (topH, inputH, bodyH int) {
 
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
-		return "Đang tải..."
+		return utils.T(m.language, utils.MsgLoading)
 	}
 	if m.width < 100 {
 		return lipgloss.NewStyle().
 			Width(m.width).Height(m.height).
 			AlignHorizontal(lipgloss.Center).
 			AlignVertical(lipgloss.Center).
-			Render("Độ rộng terminal quá nhỏ, vui lòng mở rộng tối thiểu 100 cột")
+			Render(utils.T(m.language, utils.MsgTerminalTooNarrow))
 	}
 	if m.cocreate != nil {
-		return renderCoCreateModal(m.width, m.height, m.cocreate, errorText(m.err), m.textarea.View(), m.spinnerIdx, m.quitPending)
+		return renderCoCreateModal(m.width, m.height, m.cocreate, errorText(m.err), m.textarea.View(), m.spinnerIdx, m.quitPending, m.language)
 	}
 	if m.help != nil {
 		return renderHelpModal(m.width, m.height, m.help)
@@ -633,7 +689,7 @@ func (m Model) View() string {
 		return renderSimulationModal(m.width, m.height, m.simulator)
 	}
 
-	topBar := renderTopBar(m.snapshot, m.width, m.currentSpinnerFrame(), m.version)
+	topBar := renderTopBar(m.snapshot, m.width, m.currentSpinnerFrame(), m.version, m.language)
 	inputBox := m.renderBottomBar()
 	_, inputH, bodyH := m.layoutHeights()
 
@@ -643,7 +699,7 @@ func (m Model) View() string {
 		if m.err != nil {
 			errMsg = m.err.Error()
 		}
-		body = renderWelcome(m.width, bodyH, errMsg, m.startupMode, m.importHint)
+		body = renderWelcome(m.width, bodyH, errMsg, m.startupMode, m.importHint, m.updateHint, m.language)
 	} else {
 		leftW := m.sidebarWidth()
 		rightW := m.detailWidth()
@@ -659,8 +715,8 @@ func (m Model) View() string {
 			m.streamVP.Height = streamH - 1 // -1 为 stream panel header 行
 		}
 
-		eventFlow := renderEventFlowViewport(m.viewport, centerW, eventH, m.paneHighlighted(focusEvents))
-		streamPanel := renderStreamPanel(m.streamVP, centerW, streamH, m.paneHighlighted(focusStream), m.snapshot.IsRunning || m.starting, m.spinnerIdx)
+		eventFlow := renderEventFlowViewport(m.viewport, centerW, eventH, m.paneHighlighted(focusEvents), m.language)
+		streamPanel := renderStreamPanel(m.streamVP, centerW, streamH, m.paneHighlighted(focusStream), m.snapshot.IsRunning || m.starting, m.spinnerIdx, m.language)
 		center := lipgloss.JoinVertical(lipgloss.Left, eventFlow, streamPanel)
 
 		left := renderStatePanel(m.stateVP, leftW, bodyH, m.paneHighlighted(focusState))
@@ -677,7 +733,7 @@ func (m Model) View() string {
 	} else if m.modelConfig != nil {
 		view = overlayAboveInput(view, renderModelConfigModal(m.width, m.modelConfig), inputH)
 	} else if m.compActive {
-		commandBar := renderCommandPalette(m.width, m.compItems, m.compIdx)
+		commandBar := renderCommandPalette(m.width, m.compItems, m.compIdx, m.language)
 		view = overlayAboveInput(view, commandBar, inputH)
 	}
 	return view
@@ -689,7 +745,7 @@ func (m *Model) sendCoCreate() tea.Cmd {
 	m.cocreate.reqID = m.cocreateSeq
 	m.cocreate.awaiting = true
 	m.resizeTextarea()
-	m.textarea.Placeholder = placeholderForCoCreate(m.cocreate)
+	m.textarea.Placeholder = localizedCoCreatePlaceholder(m.cocreate, m.language)
 	m.textarea.Blur()
 	return runCoCreate(m.runtime, m.cocreate)
 }
@@ -767,7 +823,7 @@ func (m Model) handleCoCreateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cocreate = nil
 			m.err = nil
 			m.resizeTextarea()
-			m.textarea.Placeholder = defaultSteerPlaceholder()
+			m.textarea.Placeholder = m.localizedSteerPlaceholder()
 			return m, tea.Batch(resumeFromCoCreate(m.runtime, draft), m.textarea.Focus())
 		}
 		// 冷启动共创：用整理好的创作指令开始创作。
@@ -857,11 +913,11 @@ func (m Model) exitCoCreate() (tea.Model, tea.Cmd) {
 	// 阶段共创取消：清占用标记、保持暂停，回到运行台输入态（不回填合成开场）。
 	if stage {
 		m.textarea.SetValue("")
-		m.textarea.Placeholder = defaultSteerPlaceholder()
+		m.textarea.Placeholder = m.localizedSteerPlaceholder()
 		return m, tea.Batch(cancelCoCreate(m.runtime), fetchSnapshot(m.runtime), m.textarea.Focus())
 	}
 	m.textarea.SetValue(initial)
-	m.textarea.Placeholder = placeholderForNewMode(m.startupMode)
+	m.textarea.Placeholder = localizedModePlaceholder(m.startupMode, m.language)
 	return m, m.textarea.Focus()
 }
 

@@ -341,3 +341,85 @@ func TestExecuteExposesModelErrorStopReason(t *testing.T) {
 		t.Fatalf("错误终止不应作为 JSON 错误重问，calls=%d", model.calls)
 	}
 }
+
+func TestExecuteClassifiesTerminalStopReasons(t *testing.T) {
+	cases := []struct {
+		name string
+		stop agentcore.StopReason
+		kind FailureKind
+		text string
+	}{
+		{"length", agentcore.StopReasonLength, FailureLength, "length"},
+		{"safety", agentcore.StopReasonSafety, FailureSafety, "safety"},
+		{"tool use", agentcore.StopReasonToolUse, FailureProtocol, "tool_use"},
+		{"aborted", agentcore.StopReasonAborted, FailureProtocol, "aborted"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model := &executionModel{responses: []string{"partial"}, stops: []agentcore.StopReason{tc.stop}}
+			_, err := Execute(t.Context(), model, Request[map[string]any]{Contract: testContract(), SystemPrompt: "判断。", Payload: "输入"})
+			var failure *Failure
+			if !errors.As(err, &failure) || failure.Kind != tc.kind || !strings.Contains(err.Error(), tc.text) {
+				t.Fatalf("stop reason %s classified as %T %+v", tc.stop, err, failure)
+			}
+		})
+	}
+}
+
+func TestExecuteRejectsProtocolAndContextFailures(t *testing.T) {
+	if _, err := Execute(t.Context(), nil, Request[map[string]any]{Contract: testContract()}); err == nil {
+		t.Fatal("nil model should return protocol failure")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	model := &executionModel{responses: []string{`{"action":"a","reason":"ok"}`}}
+	if _, err := Execute(ctx, model, Request[map[string]any]{Contract: testContract(), SystemPrompt: "判断。"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context error = %v", err)
+	}
+}
+
+func TestFailureFormattingAndUnwrap(t *testing.T) {
+	var nilFailure *Failure
+	if nilFailure.Error() != "<nil>" {
+		t.Fatal("nil failure formatting mismatch")
+	}
+	if (&Failure{}).Unwrap() != nil {
+		t.Fatal("empty failure should unwrap to nil")
+	}
+	if (&Failure{Contract: "contract"}).Error() != "contract" {
+		t.Fatal("contract-only failure formatting mismatch")
+	}
+	cause := errors.New("cause")
+	if (&Failure{Err: cause}).Error() != "cause" || !errors.Is(&Failure{Err: cause}, cause) {
+		t.Fatal("cause-only failure formatting mismatch")
+	}
+	if (&Failure{Contract: "contract", Err: cause}).Error() != "contract: cause" {
+		t.Fatal("combined failure formatting mismatch")
+	}
+}
+
+func TestExecuteHandlesNilResponseAndRequestError(t *testing.T) {
+	model := &nilResponseModel{}
+	_, err := Execute(t.Context(), model, Request[map[string]any]{Contract: testContract(), SystemPrompt: "判断。"})
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Kind != FailureProtocol {
+		t.Fatalf("nil response failure = %T %+v", err, failure)
+	}
+	requestErr := &errorGenerator{err: errors.New("request failed")}
+	_, err = Execute(t.Context(), requestErr, Request[map[string]any]{Contract: testContract(), SystemPrompt: "判断。"})
+	if !errors.As(err, &failure) || failure.Kind != FailureRequest {
+		t.Fatalf("request failure = %T %+v", err, failure)
+	}
+}
+
+type nilResponseModel struct{}
+
+func (*nilResponseModel) Generate(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
+	return nil, nil
+}
+
+type errorGenerator struct{ err error }
+
+func (m *errorGenerator) Generate(context.Context, []agentcore.Message, []agentcore.ToolSpec, ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
+	return nil, m.err
+}

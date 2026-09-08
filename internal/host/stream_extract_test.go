@@ -400,3 +400,27 @@ func TestExtract_NumberWithTrailingSpace(t *testing.T) {
 	mustContain(t, out, "chapter: 1")
 	mustContain(t, out, "title: x")
 }
+
+func TestWriteEscapedByteBranches(t *testing.T) {
+	for _, tc := range []struct {
+		input byte
+		want  string
+	}{
+		{'n', "\n"}, {'t', "\t"}, {'r', "\r"}, {'"', "\""}, {'\\', "\\"}, {'/', "/"}, {'b', ""}, {'f', ""}, {'u', ""}, {'x', "\\x"},
+	} {
+		var b strings.Builder
+		writeEscapedByte(&b, tc.input)
+		if b.String() != tc.want {
+			t.Fatalf("writeEscapedByte(%q) = %q, want %q", tc.input, b.String(), tc.want)
+		}
+	}
+}
+
+func TestParseHex4Branches(t *testing.T) {
+	if got, ok := parseHex4([]byte("12Af")); !ok || got != 0x12af {
+		t.Fatalf("parseHex4 valid = %x/%v", got, ok)
+	}
+	if _, ok := parseHex4([]byte("12Gf")); ok {
+		t.Fatal("invalid hex should fail")
+	}
+}

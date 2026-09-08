@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
 	"github.com/voocel/agentcore"
-	"github.com/voocel/ainovel-cli/internal/domain"
 )
 
 func factsN(n int) []ImportedChapterFacts {
@@ -187,6 +187,20 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
+func TestRangeDigestPayloadHelpers(t *testing.T) {
+	facts := factsN(2)
+	if got := rangeDigestPath(1, 12); !strings.Contains(got, "000001-000012") {
+		t.Fatalf("range path = %q", got)
+	}
+	if got := rangeInputDigest(facts); !strings.HasPrefix(got, "sha256:") {
+		t.Fatalf("range input digest = %q", got)
+	}
+	payload := buildRangePayload(facts)
+	if !strings.Contains(payload, "第 1-2 章") || !strings.Contains(payload, "第1章") {
+		t.Fatalf("range payload = %q", payload)
+	}
+}
+
 func TestSynthesizeDirectWithMock(t *testing.T) {
 	facts := factsN(3)
 	resp := synthesisFixtureJSON(3, storyOpen)
@@ -203,3 +217,77 @@ func TestSynthesizeDirectWithMock(t *testing.T) {
 	}
 	_ = agentcore.StopReasonStop
 }
+
+func TestSynthesizeLongBookMapReduceAndCache(t *testing.T) {
+	facts := factsN(8)
+	dir := t.TempDir()
+	ws := &Workspace{dir: dir}
+	m := &mockModel{responses: []string{
+		rangeDigestJSON(1, 2, "range one"),
+		rangeDigestJSON(3, 4, "range two"),
+		rangeDigestJSON(5, 6, "range three"),
+		rangeDigestJSON(7, 8, "range four"),
+		rangeDigestJSON(1, 4, "merged one"),
+		rangeDigestJSON(5, 8, "merged two"),
+		synthesisFixtureJSON(8, storyClosed),
+	}}
+	one := len(compactFact(facts[0])) * 2
+	got, err := Synthesize(context.Background(), m, "book", "range", ws, facts, one, 4096, callProfile{})
+	if err != nil {
+		t.Fatalf("long synthesis: %v", err)
+	}
+	if got.StoryStatus != storyClosed || m.calls() != 7 {
+		t.Fatalf("long synthesis result=%+v calls=%d", got, m.calls())
+	}
+	for _, path := range []string{rangeDigestPath(1, 2), rangeDigestPath(3, 4), rangeDigestPath(5, 6), rangeDigestPath(7, 8)} {
+		if !ws.has(path) {
+			t.Fatalf("expected range cache artifact %s", path)
+		}
+	}
+}
+
+func TestResolveStoryBranches(t *testing.T) {
+	ws := &Workspace{dir: t.TempDir()}
+	r := &runner{ws: ws}
+	for _, tc := range []struct {
+		status string
+		want   bool
+	}{
+		{storyClosed, true}, {storyOpen, false},
+	} {
+		got, err := r.resolveStory(&BookSynthesis{StoryStatus: tc.status})
+		if err != nil || got != tc.want {
+			t.Fatalf("resolveStory(%s) = %v/%v", tc.status, got, err)
+		}
+	}
+	if _, err := r.resolveStory(&BookSynthesis{StoryStatus: "bad"}); err == nil {
+		t.Fatal("unknown story status should fail")
+	}
+}
+
+func TestValidateSynthesisBranches(t *testing.T) {
+	valid := func() *BookSynthesis {
+		return &BookSynthesis{Synopsis: "syn", Premise: "premise", Characters: []domain.Character{{Name: "甲"}}, PlanningTier: domain.PlanningTierShort, StoryStatus: storyOpen, Compass: domain.StoryCompass{EndingDirection: "end"}, Structure: []ImportedVolumeRange{{Arcs: []ImportedArcRange{{StartChapter: 1, EndChapter: 1}}}}}
+	}
+	for _, edit := range []func(*BookSynthesis){
+		func(s *BookSynthesis) { s.Synopsis = "" },
+		func(s *BookSynthesis) { s.Premise = "" },
+		func(s *BookSynthesis) { s.Characters = nil },
+		func(s *BookSynthesis) { s.PlanningTier = "bad" },
+		func(s *BookSynthesis) { s.StoryStatus = "bad" },
+		func(s *BookSynthesis) { s.Compass.EndingDirection = "" },
+		func(s *BookSynthesis) { s.Structure = nil },
+	} {
+		s := valid()
+		edit(s)
+		if err := validateSynthesis(s, 1); err == nil {
+			t.Fatalf("invalid synthesis accepted: %+v", s)
+		}
+	}
+}
+
+func (m *mockModel) calls() int {
+	return len(m.responses)
+}
+
+var _ = json.Valid

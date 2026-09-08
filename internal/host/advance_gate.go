@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/flow"
-	"github.com/voocel/ainovel-cli/internal/store"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/domain"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/flow"
+	"github.com/JustinNguyen9979/ainovel-cli/internal/store"
 )
 
 // ChapterAdvanceGate 是 Host 唯一的创作前进政策组件：
