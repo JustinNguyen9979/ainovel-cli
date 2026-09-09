@@ -230,7 +230,8 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$NODE_AUTH_TOKEN" || { echo 'NPM_TOKEN is required in production environment'; exit 1; }
-          tarball="dist/ainovel-cli-vn-${VERSION}.tgz"
+          tarball="./dist/ainovel-cli-vn-${VERSION}.tgz"
+          test -s "$tarball"
           actual_sha1="$(shasum -a 1 "$tarball" | awk '{print $1}')"
           existing_sha1="$(npm view "ainovel-cli-vn@${VERSION}" dist.shasum 2>/dev/null || true)"
           if [ -n "$existing_sha1" ]; then
