@@ -13,6 +13,7 @@ builds:
     binary: ainovel-cli
     env:
       - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -37,8 +38,13 @@ archives:
         formats:
           - zip
     files:
-      - README.md
-      - LICENSE
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_
       {{- title .Os }}_

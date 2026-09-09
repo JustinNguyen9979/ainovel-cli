@@ -40,8 +40,8 @@ Launcher npm không chứa binary Go. Ở lần chạy đầu, launcher tải ar
 Để dùng phiên bản cố định:
 
 ```bash
-npm install --global ainovel-cli-vn@0.8.0
-npx ainovel-cli-vn@0.8.0 --version
+npm install --global ainovel-cli-vn@0.8.1
+npx ainovel-cli-vn@0.8.1 --version
 ```
 
 Package hỗ trợ các target sau:

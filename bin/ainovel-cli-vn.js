@@ -39,9 +39,10 @@ const TARGETS = {
 };
 
 class ByteLimitTransform extends Transform {
-  constructor(limit) {
+  constructor(limit, onProgress) {
     super();
     this.limit = limit;
+    this.onProgress = onProgress;
     this.total = 0;
   }
 
@@ -51,6 +52,7 @@ class ByteLimitTransform extends Transform {
       callback(new Error(`Downloaded file exceeds ${this.limit} bytes`));
       return;
     }
+    this.onProgress?.(this.total);
     callback(null, chunk);
   }
 }
@@ -274,7 +276,15 @@ function downloadText(url) {
 async function downloadFile(url, destination) {
   try {
     await request(url, (response) => {
-      const limit = new ByteLimitTransform(MAX_ARCHIVE_BYTES);
+      const contentLength = Number(response.headers['content-length'] || 0);
+      let lastReported = 0;
+      const reportProgress = (downloaded) => {
+        if (downloaded - lastReported < 512 * 1024 && downloaded !== contentLength) return;
+        lastReported = downloaded;
+        const total = contentLength > 0 ? `/${Math.ceil(contentLength / 1024 / 1024)} MB` : '';
+        process.stderr.write(`ainovel-cli-vn: downloading native binary ${Math.ceil(downloaded / 1024 / 1024)} MB${total}\n`);
+      };
+      const limit = new ByteLimitTransform(MAX_ARCHIVE_BYTES, reportProgress);
       const output = fs.createWriteStream(destination, { flags: 'wx', mode: 0o600 });
       return pipeline(response, limit, output);
     });
@@ -438,6 +448,7 @@ async function installBinary(version, target) {
     const asset = assetName(version, target);
     const archive = path.join(temporary, asset);
     const checksumsURL = releaseURL(version, `${BINARY_NAME}_checksums.txt`);
+    process.stderr.write(`ainovel-cli-vn: downloading ${asset}...\n`);
     await Promise.all([
       downloadFile(releaseURL(version, asset), archive),
       downloadText(checksumsURL),
