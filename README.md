@@ -25,24 +25,17 @@ CLI sáng tác tiểu thuyết dài kỳ bằng AI, với giao diện TUI tiến
 Cài launcher toàn cục:
 
 ```bash
-npm install --global ainovel-cli-vn
+npm install --global ainovel-cli-vn@latest
 ainovel-cli-vn
 ```
 
 Hoặc chạy trực tiếp bằng `npx`:
 
 ```bash
-npx ainovel-cli-vn
+npx ainovel-cli-vn@latest
 ```
 
-Launcher npm không chứa binary Go. Ở lần chạy đầu, launcher tải archive native đúng với hệ điều hành và CPU từ GitHub Release tương ứng, kiểm tra SHA-256 rồi cache bên ngoài `node_modules`. Vì vậy npm install cần internet ở lần chạy đầu tiên; các lần sau có thể chạy từ cache đã xác minh.
-
-Để dùng phiên bản cố định:
-
-```bash
-npm install --global ainovel-cli-vn@0.8.1
-npx ainovel-cli-vn@0.8.1 --version
-```
+Launcher npm không chứa binary Go. Ở lần chạy đầu, launcher tải archive native đúng với hệ điều hành và CPU từ GitHub Release tương ứng, kiểm tra SHA-256 rồi cache bên ngoài `node_modules`. Vì vậy npm install cần internet ở lần chạy đầu tiên; các lần sau có thể chạy từ cache đã xác minh. Dùng `@latest` để luôn cài và chạy bản phát hành mới nhất.
 
 Package hỗ trợ các target sau:
 
