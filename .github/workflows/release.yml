@@ -159,6 +159,7 @@ jobs:
         with:
           artifact-ids: ${{ needs.build.outputs.artifact }}
           path: dist
+          merge-multiple: true
       - name: Attest build provenance
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45
         with:
@@ -180,6 +181,7 @@ jobs:
         with:
           artifact-ids: ${{ needs.build.outputs.artifact }}
           path: dist
+          merge-multiple: true
       - name: Publish GitHub Release assets idempotently
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
