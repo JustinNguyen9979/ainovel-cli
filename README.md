@@ -151,6 +151,18 @@ output/novel/
     └── sessions/
 ```
 
+## Theo dõi upstream
+
+Workflow [`Upstream monitor`](.github/workflows/upstream-monitor.yml) kiểm tra repo tác giả [`voocel/ainovel-cli`](https://github.com/voocel/ainovel-cli), nhánh `main`, mỗi ngày. Khi phát hiện commit mới, workflow cập nhật một issue theo dõi duy nhất trong repo này; workflow không tự động merge thay đổi upstream vì bản tiếng Việt có thể cần đồng bộ chọn lọc.
+
+Có thể fetch upstream thủ công để review:
+
+```bash
+git remote add upstream https://github.com/voocel/ainovel-cli.git
+git fetch upstream main
+git log --oneline upstream/main
+```
+
 ## Build từ source
 
 ```bash
