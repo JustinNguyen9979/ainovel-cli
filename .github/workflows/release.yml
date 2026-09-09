@@ -207,11 +207,12 @@ jobs:
             if [ -n "$existing" ]; then
               rm -f "$tmp_dir/$name"
               gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$tmp_dir" --clobber
-              [ "$(sha256_file "$file")" = "$(sha256_file "$tmp_dir/$name")" ] || {
-                echo "existing release asset has a different digest: $name" >&2
-                exit 1
-              }
-              echo "Release asset already matches: $name"
+              if [ "$(sha256_file "$file")" = "$(sha256_file "$tmp_dir/$name")" ]; then
+                echo "Release asset already matches: $name"
+              else
+                echo "Replacing release asset with the immutable build: $name"
+                gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber
+              fi
             else
               gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY"
             fi
