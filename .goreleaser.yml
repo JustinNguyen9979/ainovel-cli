@@ -74,6 +74,6 @@ release:
   github:
     owner: JustinNguyen9979
     name: ainovel-cli
-    draft: true
-    prerelease: auto
-    mode: replace
+  draft: true
+  prerelease: auto
+  mode: replace
