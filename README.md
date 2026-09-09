@@ -25,24 +25,17 @@ CLI sáng tác tiểu thuyết dài kỳ bằng AI, với giao diện TUI tiến
 Cài launcher toàn cục:
 
 ```bash
-npm install --global ainovel-cli-vn
+npm install --global ainovel-cli-vn@latest
 ainovel-cli-vn
 ```
 
 Hoặc chạy trực tiếp bằng `npx`:
 
 ```bash
-npx ainovel-cli-vn
+npx ainovel-cli-vn@latest
 ```
 
-Launcher npm không chứa binary Go. Ở lần chạy đầu, launcher tải archive native đúng với hệ điều hành và CPU từ GitHub Release tương ứng, kiểm tra SHA-256 rồi cache bên ngoài `node_modules`. Vì vậy npm install cần internet ở lần chạy đầu tiên; các lần sau có thể chạy từ cache đã xác minh.
-
-Để dùng phiên bản cố định:
-
-```bash
-npm install --global ainovel-cli-vn@0.8.1
-npx ainovel-cli-vn@0.8.1 --version
-```
+Launcher npm không chứa binary Go. Ở lần chạy đầu, launcher tải archive native đúng với hệ điều hành và CPU từ GitHub Release tương ứng, kiểm tra SHA-256 rồi cache bên ngoài `node_modules`. Vì vậy npm install cần internet ở lần chạy đầu tiên; các lần sau có thể chạy từ cache đã xác minh. Dùng `@latest` để luôn cài và chạy bản phát hành mới nhất.
 
 Package hỗ trợ các target sau:
 
@@ -156,6 +149,18 @@ output/novel/
     ├── progress.json
     ├── checkpoints.jsonl
     └── sessions/
+```
+
+## Theo dõi upstream
+
+Workflow [`Upstream monitor`](.github/workflows/upstream-monitor.yml) kiểm tra repo tác giả [`voocel/ainovel-cli`](https://github.com/voocel/ainovel-cli), nhánh `main`, mỗi ngày. Khi phát hiện commit mới, workflow cập nhật một issue theo dõi duy nhất trong repo này; workflow không tự động merge thay đổi upstream vì bản tiếng Việt có thể cần đồng bộ chọn lọc.
+
+Có thể fetch upstream thủ công để review:
+
+```bash
+git remote add upstream https://github.com/voocel/ainovel-cli.git
+git fetch upstream main
+git log --oneline upstream/main
 ```
 
 ## Build từ source
